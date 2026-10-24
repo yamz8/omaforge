@@ -1,0 +1,25 @@
+[package]
+name = "omaforge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+forge-git = { path = "../forge-git" }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+argon2 = "0.6.0"
+sha2 = "0.11.1"
+hex = "0.4.3"
+base64 = "0.23.1"
+rpassword = "7.5.4"
+futures-util = "0.3.34"
+serde.workspace = true
+tokio-util = { version = "0.7.20", features = ["io"] }
+tower-http = { version = "0.7.1", features = ["decompression-gzip", "trace"] }
+getrandom = "0.4.3"
