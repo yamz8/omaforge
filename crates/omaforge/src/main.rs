@@ -1,6 +1,8 @@
 mod auth;
 mod db;
 mod git_http;
+mod git_service;
+mod git_ssh;
 
 use std::{
     io::BufRead,
@@ -33,6 +35,9 @@ enum Command {
     Serve {
         #[arg(long, env = "OMAFORGE_LISTEN", default_value = "127.0.0.1:3000")]
         listen: SocketAddr,
+        /// Address for git over SSH.
+        #[arg(long, env = "OMAFORGE_SSH_LISTEN", default_value = "127.0.0.1:2222")]
+        ssh_listen: SocketAddr,
     },
     /// Administrative tasks.
     #[command(subcommand)]
@@ -40,7 +45,6 @@ enum Command {
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::enum_variant_names)] // Variant names are the CLI command names.
 enum AdminCommand {
     /// Create a user. Prompts for the password unless --password-stdin is given.
     CreateUser {
@@ -60,6 +64,14 @@ enum AdminCommand {
         repo: String,
         #[arg(long)]
         private: bool,
+    },
+    /// Add an SSH public key for a user, read from --key-file or stdin.
+    AddSshKey {
+        username: String,
+        name: String,
+        /// Path to an OpenSSH public key, e.g. ~/.ssh/id_ed25519.pub.
+        #[arg(long)]
+        key_file: Option<PathBuf>,
     },
 }
 
@@ -85,7 +97,7 @@ async fn main() -> Result<()> {
             tracing::info!(path = %cli.data.display(), "initialized data directory");
             Ok(())
         }
-        Command::Serve { listen } => serve(state, listen).await,
+        Command::Serve { listen, ssh_listen } => serve(&cli.data, state, listen, ssh_listen).await,
         Command::Admin(command) => admin(&state, command).await,
     }
 }
@@ -98,7 +110,15 @@ async fn open(data: &Path) -> Result<AppState> {
     Ok(AppState { db, repos })
 }
 
-async fn serve(state: AppState, listen: SocketAddr) -> Result<()> {
+async fn serve(
+    data: &Path,
+    state: AppState,
+    listen: SocketAddr,
+    ssh_listen: SocketAddr,
+) -> Result<()> {
+    let host_key = git_ssh::load_or_create_host_key(data)?;
+    let ssh = git_ssh::serve(state.clone(), ssh_listen, host_key);
+
     let app = Router::new()
         .route("/", get(|| async { "omaforge" }))
         .route("/health", get(|| async { "ok" }))
@@ -107,8 +127,10 @@ async fn serve(state: AppState, listen: SocketAddr) -> Result<()> {
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    tracing::info!(%listen, "omaforge listening");
-    axum::serve(listener, app).await?;
+    tracing::info!(%listen, "HTTP listening");
+    let http = async { anyhow::Ok(axum::serve(listener, app).await?) };
+
+    tokio::try_join!(http, ssh)?;
     Ok(())
 }
 
@@ -150,6 +172,21 @@ async fn admin(state: &AppState, command: AdminCommand) -> Result<()> {
             let owner = find_user(state, owner).await?;
             db::create_repo(&state.db, &state.repos, &owner, name, private).await?;
             println!("created {}/{name}", owner.username);
+        }
+        AdminCommand::AddSshKey {
+            username,
+            name,
+            key_file,
+        } => {
+            let user = find_user(state, &username).await?;
+            let line = match key_file {
+                Some(path) => std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?,
+                None => std::io::read_to_string(std::io::stdin())?,
+            };
+            let (public_key, fingerprint) = git_ssh::parse_public_key(&line)?;
+            db::add_ssh_key(&state.db, user.id, &name, &public_key, &fingerprint).await?;
+            println!("added {fingerprint} for {}", user.username);
         }
     }
     Ok(())

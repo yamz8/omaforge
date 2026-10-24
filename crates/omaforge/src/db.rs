@@ -135,3 +135,48 @@ pub async fn repo_by_path(db: &SqlitePool, owner: &str, name: &str) -> Result<Op
     .await?;
     Ok(repo)
 }
+
+pub async fn add_ssh_key(
+    db: &SqlitePool,
+    user_id: i64,
+    name: &str,
+    public_key: &str,
+    fingerprint: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO ssh_keys (user_id, name, public_key, fingerprint) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(name)
+    .bind(public_key)
+    .bind(fingerprint)
+    .execute(db)
+    .await
+    .map_err(|error| match error {
+        sqlx::Error::Database(e) if e.is_unique_violation() => {
+            anyhow::anyhow!("SSH key {fingerprint} is already registered")
+        }
+        error => error.into(),
+    })?;
+    Ok(())
+}
+
+pub async fn user_by_ssh_fingerprint(db: &SqlitePool, fingerprint: &str) -> Result<Option<User>> {
+    let user = sqlx::query_as(
+        "SELECT u.id, u.username, u.password_hash, u.is_admin
+         FROM ssh_keys k JOIN users u ON u.id = k.user_id
+         WHERE k.fingerprint = ?",
+    )
+    .bind(fingerprint)
+    .fetch_optional(db)
+    .await?;
+    Ok(user)
+}
+
+pub async fn touch_ssh_key(db: &SqlitePool, fingerprint: &str) -> Result<()> {
+    sqlx::query("UPDATE ssh_keys SET last_used_at = CURRENT_TIMESTAMP WHERE fingerprint = ?")
+        .bind(fingerprint)
+        .execute(db)
+        .await?;
+    Ok(())
+}

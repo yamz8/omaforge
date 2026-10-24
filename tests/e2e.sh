@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# End-to-end test: runs a real omaforge server and drives it with git over HTTP and SSH.
+#
+#   cargo build && tests/e2e.sh [work-dir]
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BIN=${OMAFORGE_BIN:-$ROOT/target/debug/omaforge}
+W=${1:-$(mktemp -d)}
+rm -rf "$W" && mkdir -p "$W" && cd "$W" || exit 1
+export OMAFORGE_DATA=$W/data GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 HOME=$W/home
+mkdir -p "$HOME"
+git config --global user.name test
+git config --global user.email test@example.com
+git config --global init.defaultBranch main
+
+PORT=${E2E_HTTP_PORT:-3917} SSH_PORT=${E2E_SSH_PORT:-3922}
+URL=http://127.0.0.1:$PORT
+SSH_URL=ssh://git@127.0.0.1:$SSH_PORT
+pass=0 fail=0
+
+check() {
+    local name=$1; shift
+    if "$@" >"$W/last.log" 2>&1; then
+        echo "PASS $name"; pass=$((pass + 1))
+    else
+        echo "FAIL $name"; sed 's/^/    /' "$W/last.log" | tail -5; fail=$((fail + 1))
+    fi
+}
+refuse() {
+    local name=$1; shift
+    if "$@" >"$W/last.log" 2>&1; then
+        echo "FAIL $name (should have been refused)"; fail=$((fail + 1))
+    else
+        echo "PASS $name ($(grep -m1 -oE '(omaforge|fatal|[Ee]rror|.*Permission denied).*' "$W/last.log"))"
+        pass=$((pass + 1))
+    fi
+}
+start_server() {
+    $BIN serve --listen 127.0.0.1:$PORT --ssh-listen 127.0.0.1:$SSH_PORT >>"$W/server.log" 2>&1 &
+    SERVER=$!
+    for _ in $(seq 100); do curl -sf $URL/health >/dev/null && return; sleep 0.1; done
+    echo "server did not start"; cat "$W/server.log"; exit 1
+}
+# git over SSH as the owner of key $1.
+ssh_as() { echo "ssh -i $W/$1 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"; }
+
+$BIN init 2>/dev/null
+echo alicepassword | $BIN admin create-user alice --admin --password-stdin >/dev/null
+echo bobpassword1 | $BIN admin create-user bob --password-stdin >/dev/null
+TOKEN=$($BIN admin create-token alice laptop)
+$BIN admin create-repo alice/hello >/dev/null
+$BIN admin create-repo alice/secret --private >/dev/null
+for k in alice bob mallory; do ssh-keygen -q -t ed25519 -N '' -C "$k@test" -f "$W/$k"; done
+check "add alice's SSH key"          $BIN admin add-ssh-key alice laptop --key-file "$W/alice.pub"
+check "add bob's SSH key from stdin" bash -c "$BIN admin add-ssh-key bob desktop < '$W/bob.pub'"
+refuse "same key twice"              $BIN admin add-ssh-key bob again --key-file "$W/alice.pub"
+refuse "garbage key"                 bash -c "echo 'ssh-ed25519 notakey' | $BIN admin add-ssh-key bob junk"
+
+start_server
+trap 'kill $SERVER 2>/dev/null' EXIT
+
+echo "== HTTP"
+git init -q src && cd src
+for i in $(seq 200); do echo "line $i" >>file.txt; git add file.txt; git commit -qm "commit $i"; done
+head -c 3000000 /dev/urandom >blob.bin && git add blob.bin && git commit -qm blob && git tag v1
+check "push with token"            git push -q http://alice:$TOKEN@127.0.0.1:$PORT/alice/hello.git main v1
+refuse "anonymous push"            git push -q $URL/alice/hello.git main:other
+refuse "bob push to alice/hello"   git push -q http://bob:bobpassword1@127.0.0.1:$PORT/alice/hello.git main:other
+refuse "wrong password"            git push -q http://alice:nope@127.0.0.1:$PORT/alice/hello.git main:other
+check "push private w/ password"   git push -q http://alice:alicepassword@127.0.0.1:$PORT/alice/secret.git main
+cd ..
+check "anon clone v2"              git -c protocol.version=2 clone -q $URL/alice/hello.git c-v2
+check "clone content matches"      bash -c "cmp src/blob.bin c-v2/blob.bin && [ \$(git -C c-v2 rev-list --count HEAD) = 201 ] && git -C c-v2 tag | grep -q v1"
+check "anon clone v0"              git -c protocol.version=0 clone -q $URL/alice/hello c-v0
+check "clone without .git suffix"  test -f c-v0/blob.bin
+refuse "anon clone private"        git clone -q $URL/alice/secret.git p1
+refuse "bob clone private"         git clone -q http://bob:bobpassword1@127.0.0.1:$PORT/alice/secret.git p2
+check "alice clone private"        git clone -q http://alice:$TOKEN@127.0.0.1:$PORT/alice/secret.git p3
+refuse "clone missing repo"        git clone -q $URL/alice/nope.git p4
+(cd src && for i in $(seq 300); do echo "more $i" >>file.txt; git commit -qam "more $i"; done)
+check "push incremental"           git -C src push -q http://alice:$TOKEN@127.0.0.1:$PORT/alice/hello.git main
+check "fetch incremental v0"       git -C c-v0 -c protocol.version=0 pull -q --ff-only
+check "fetched 501 commits"        test "$(git -C c-v0 rev-list --count HEAD)" = 501
+check "path traversal 404"         bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' --path-as-is '$URL/../../etc/info/refs?service=git-upload-pack') != 200 ] && [ \$(curl -s -o /dev/null -w '%{http_code}' '$URL/alice/..%2F..%2Fetc/info/refs?service=git-upload-pack') = 404 ]"
+check "dumb protocol refused"      bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/hello.git/info/refs) = 403 ]"
+# Local history the server lacks makes negotiation requests big enough (>1KB) for git to
+# gzip. Protocol v2 negotiates in smaller rounds that stay under that, so use v0 here.
+git clone -q $URL/alice/hello.git gz && (cd gz && git checkout -qb local && for i in $(seq 200); do echo "l $i" >>local.txt; git add local.txt; git commit -qm "local $i"; done)
+(cd src && echo next >>file.txt && git commit -qam next && git push -q http://alice:$TOKEN@127.0.0.1:$PORT/alice/hello.git main)
+check "gzipped fetch request"      bash -c "GIT_TRACE_CURL=1 GIT_TRACE_CURL_NO_DATA=1 git -C gz -c protocol.version=0 fetch -q origin 2>&1 | grep -qi 'Content-Encoding: gzip' && [ \$(git -C gz rev-parse origin/main) = \$(git -C src rev-parse main) ]"
+check "token last_used recorded"   bash -c "sqlite3 $OMAFORGE_DATA/omaforge.db 'select last_used_at from tokens' | grep -q 20"
+
+echo "== SSH"
+export GIT_SSH_COMMAND
+GIT_SSH_COMMAND=$(ssh_as alice)
+check "ssh clone v2"               git -c protocol.version=2 clone -q $SSH_URL/alice/hello.git s-v2
+check "ssh used protocol v2"       bash -c "GIT_TRACE_PACKET=1 git -c protocol.version=2 ls-remote $SSH_URL/alice/hello.git 2>&1 | grep -q '< version 2'"
+check "ssh clone v0"               git -c protocol.version=0 clone -q $SSH_URL/alice/hello s-v0
+check "ssh clone content matches"  bash -c "[ \$(git -C s-v2 rev-list --count HEAD) = 502 ] && cmp src/blob.bin s-v0/blob.bin"
+(cd s-v2 && echo ssh >ssh.txt && git add ssh.txt && git commit -qm "via ssh")
+check "ssh push"                   git -C s-v2 push -q origin main
+check "ssh push visible over http" bash -c "git -C c-v2 pull -q --ff-only && test -f c-v2/ssh.txt"
+check "ssh clone private (owner)"  git clone -q $SSH_URL/alice/secret.git s-secret
+check "ssh key last_used recorded" bash -c "sqlite3 $OMAFORGE_DATA/omaforge.db \"select last_used_at from ssh_keys where name='laptop'\" | grep -q 20"
+GIT_SSH_COMMAND=$(ssh_as bob)
+check "bob ssh clone public"       git clone -q $SSH_URL/alice/hello.git s-bob
+refuse "bob ssh push"              git -C s-bob push -q origin main:bob-branch
+refuse "bob ssh clone private"     git clone -q $SSH_URL/alice/secret.git s-bob-secret
+refuse "ssh missing repo"          git clone -q $SSH_URL/alice/nope.git s-nope
+refuse "ssh traversal"             git clone -q "$SSH_URL/../../etc/passwd" s-trav
+GIT_SSH_COMMAND=$(ssh_as mallory)
+refuse "unknown key"               git clone -q $SSH_URL/alice/hello.git s-mallory
+unset GIT_SSH_COMMAND
+check "shell greets, exits 1"      bash -c "$(ssh_as alice) -p $SSH_PORT git@127.0.0.1 2>&1 </dev/null; [ \$? = 1 ]" 
+check "shell greeting text"        bash -c "$(ssh_as alice) -p $SSH_PORT git@127.0.0.1 2>&1 </dev/null | grep -q 'Hi alice!'"
+refuse "arbitrary command"         $(ssh_as alice) -p $SSH_PORT git@127.0.0.1 "cat /etc/passwd"
+check "host key is private"        bash -c "[ \$(stat -c %a $OMAFORGE_DATA/ssh_host_ed25519_key) = 600 ]"
+FP1=$(ssh-keyscan -p $SSH_PORT 127.0.0.1 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
+kill $SERVER; wait $SERVER 2>/dev/null
+start_server
+FP2=$(ssh-keyscan -p $SSH_PORT 127.0.0.1 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
+check "host key stable on restart" bash -c "[ -n '$FP1' ] && [ '$FP1' = '$FP2' ]"
+
+echo "---- $pass passed, $fail failed"
+if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
+    echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10
+fi
+[ $fail = 0 ]

@@ -22,7 +22,8 @@ use tower_http::decompression::RequestDecompressionLayer;
 
 use crate::{
     auth::{self, Identity},
-    db, AppState,
+    git_service::{self, Decision, Service},
+    AppState,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -32,33 +33,6 @@ pub fn routes() -> Router<AppState> {
         .route("/{owner}/{repo}/git-receive-pack", post(receive_pack))
         // git gzips large upload-pack requests.
         .layer(RequestDecompressionLayer::new())
-}
-
-#[derive(Clone, Copy)]
-enum Service {
-    UploadPack,
-    ReceivePack,
-}
-
-impl Service {
-    fn from_query(name: &str) -> Option<Self> {
-        match name {
-            "git-upload-pack" => Some(Self::UploadPack),
-            "git-receive-pack" => Some(Self::ReceivePack),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::UploadPack => "git-upload-pack",
-            Self::ReceivePack => "git-receive-pack",
-        }
-    }
-
-    fn subcommand(self) -> &'static str {
-        &self.name()["git-".len()..]
-    }
 }
 
 #[derive(Deserialize)]
@@ -72,7 +46,7 @@ async fn info_refs(
     Query(query): Query<InfoRefsQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(service) = query.service.as_deref().and_then(Service::from_query) else {
+    let Some(service) = query.service.as_deref().and_then(Service::from_name) else {
         return (
             StatusCode::FORBIDDEN,
             "dumb HTTP protocol is not supported\n",
@@ -195,8 +169,7 @@ async fn rpc(
     )
 }
 
-/// Resolve and authorize a repo for `service`, returning its on-disk path. Private repos
-/// look missing to anyone who can't read them.
+/// Authenticate the request and authorize `service` on the repo, returning its path.
 #[allow(clippy::result_large_err)]
 async fn authorize(
     state: &AppState,
@@ -205,40 +178,22 @@ async fn authorize(
     headers: &HeaderMap,
     service: Service,
 ) -> Result<PathBuf, Response> {
-    let name = repo.strip_suffix(".git").unwrap_or(repo);
-    if !forge_git::is_valid_name(owner) || !forge_git::is_valid_name(name) {
-        return Err(StatusCode::NOT_FOUND.into_response());
-    }
-
     let user = match auth::authenticate(&state.db, headers).await {
         Ok(Identity::User(user)) => Some(user),
         Ok(Identity::Anonymous) => None,
         Ok(Identity::Invalid) => return Err(unauthorized()),
         Err(error) => return Err(internal_error(error)),
     };
-    let repo = match db::repo_by_path(&state.db, owner, name).await {
-        Ok(repo) => repo,
-        Err(error) => return Err(internal_error(error)),
-    };
-
-    let allowed = repo.as_ref().is_some_and(|repo| match service {
-        Service::UploadPack => auth::can_read(user.as_ref(), repo),
-        Service::ReceivePack => auth::can_write(user.as_ref(), repo),
-    });
-    match (repo, allowed, &user) {
-        (Some(repo), true, _) => Ok(forge_git::repo_path(
-            &state.repos,
-            &repo.owner_name,
-            &repo.name,
-        )),
-        // Ask anonymous clients to log in rather than revealing whether the repo exists.
-        (_, false, None) => Err(unauthorized()),
-        (Some(repo), false, Some(_)) if auth::can_read(user.as_ref(), &repo) => Err((
+    match git_service::authorize(state, user.as_ref(), owner, repo, service).await {
+        Ok(Decision::Allowed(path)) => Ok(path),
+        Ok(Decision::NeedsLogin) => Err(unauthorized()),
+        Ok(Decision::ReadOnly) => Err((
             StatusCode::FORBIDDEN,
             "you do not have write access to this repository\n",
         )
             .into_response()),
-        _ => Err(StatusCode::NOT_FOUND.into_response()),
+        Ok(Decision::NotFound) => Err(StatusCode::NOT_FOUND.into_response()),
+        Err(error) => Err(internal_error(error)),
     }
 }
 
