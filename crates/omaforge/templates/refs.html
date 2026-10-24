@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{% if kind == "branches" %}Branches{% else %}Tags{% endif %} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="box">
+  <div class="box-header"><strong>{% if kind == "branches" %}Branches{% else %}Tags{% endif %}</strong><span class="muted">{{ refs.len() }}</span></div>
+  {% if refs.is_empty() %}
+  <div class="empty-state">No {{ kind }} yet.</div>
+  {% else %}
+  <ul class="commit-list ref-list">
+    {% for r in refs %}
+    <li>
+      <div class="summary">
+        <a class="ref-name" href="{{ r.url }}">{{ r.name }}</a>{% if r.is_default %} <span class="badge">default</span>{% endif %}
+        <div class="meta">{{ r.subject }} · updated {{ r.time_ago }}</div>
+      </div>
+      <a class="sha" href="{{ r.commit_url }}">{{ r.short_id }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

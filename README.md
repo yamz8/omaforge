@@ -12,7 +12,7 @@ cargo run -- admin create-user alice --admin
 cargo run -- admin create-repo alice/hello
 cargo run -- admin create-token alice laptop   # prints omf_… token
 cargo run -- admin add-ssh-key alice laptop --key-file ~/.ssh/id_ed25519.pub
-cargo run -- serve                             # HTTP :3000, SSH :2222
+cargo run -- serve                             # web + HTTP git :3000, SSH :2222
 
 git push http://alice:<token>@127.0.0.1:3000/alice/hello.git main
 git push ssh://git@127.0.0.1:2222/alice/hello.git main
@@ -23,6 +23,10 @@ Run the end-to-end tests (real server, real git over HTTP and SSH) with:
 ```sh
 cargo build && tests/e2e.sh
 ```
+
+Open http://127.0.0.1:3000 to browse. The UI follows your active Omarchy theme
+(`--theme builtin|omarchy|<colors.toml>` to choose), and `--public-url` sets the
+URL used in clone instructions.
 
 Data lives in `./data` (override with `--data` or `OMAFORGE_DATA`).
 

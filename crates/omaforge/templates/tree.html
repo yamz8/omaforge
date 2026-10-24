@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{% if crumbs.is_empty() %}{{ repo.owner }}/{{ repo.name }}{% else %}{% for c in crumbs %}{% if loop.last %}{{ c.name }}{% endif %}{% endfor %} · {{ repo.owner }}/{{ repo.name }}{% endif %} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="toolbar">
+  {% include "ref_picker.html" %}
+  {% if !crumbs.is_empty() %}
+  <div class="breadcrumbs">
+    <a href="{{ root_url }}">{{ repo.name }}</a>
+    {% for c in crumbs %} / {% if loop.last %}<strong>{{ c.name }}</strong>{% else %}<a href="{{ c.url }}">{{ c.name }}</a>{% endif %}{% endfor %}
+  </div>
+  {% endif %}
+  <span class="spacer"></span>
+  <a class="button" href="{{ history_url }}">{{ crate::web::icons::HISTORY|safe }}{% if let Some(count) = commit_count %}{{ count }} commit{% if *count != 1 %}s{% endif %}{% else %}History{% endif %}</a>
+  {% include "clone_menu.html" %}
+</div>
+<div class="box">
+  {% include "latest_commit.html" %}
+  <table class="files">
+    {% for e in entries %}
+    <tr>
+      <td class="icon-cell">{{ e.icon|safe }}</td>
+      <td class="name"><a href="{{ e.url }}">{{ e.name }}</a></td>
+      <td class="size">{{ e.size }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% if let Some(readme) = readme %}
+<div class="box">
+  <div class="box-header">{{ crate::web::icons::BOOK|safe }}<a href="{{ readme.url }}"><strong>{{ readme.name }}</strong></a></div>
+  <div class="box-body markdown">{{ readme.html|safe }}</div>
+</div>
+{% endif %}
+{% endblock %}

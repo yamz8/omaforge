@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="box">
+  <div class="box-body setup">
+    <h2>This repository is empty</h2>
+    <p class="muted">Push an existing repository:</p>
+    <pre>git remote add origin {% if let Some(ssh) = repo.ssh_clone %}{{ ssh }}{% else %}{{ repo.http_clone }}{% endif %}
+git push -u origin main</pre>
+    <h2>Or start a new one</h2>
+    <pre>git init
+git add README.md
+git commit -m "First commit"
+git remote add origin {% if let Some(ssh) = repo.ssh_clone %}{{ ssh }}{% else %}{{ repo.http_clone }}{% endif %}
+git push -u origin main</pre>
+    <h2>Clone URLs</h2>
+    <pre>{{ repo.http_clone }}{% if let Some(ssh) = repo.ssh_clone %}
+{{ ssh }}{% endif %}</pre>
+  </div>
+</div>
+{% endblock %}

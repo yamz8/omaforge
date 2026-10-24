@@ -25,8 +25,8 @@ and optionally staying in sync with GitHub.
 | Component | Responsibility | Key crates |
 |---|---|---|
 | `omaforge` (bin) | CLI entry: `serve`, `init`, `admin`, `import`, `sync` | clap, tokio |
-| web | Routes, auth/sessions, HTML views | axum, askama, tower-http |
-| `forge-git` | Read repos (trees, blobs, commits, diffs, blame), refs, merges | gix (gitoxide); `git` CLI for merges/hooks |
+| web | Routes, auth/sessions, HTML views; Markdown (GFM, sanitized), syntax highlighting, theme | axum, askama, comrak + ammonia, syntect (+ two-face), tower-http |
+| `forge-git` | Read repos (trees, blobs, commits, diffs, blame), refs, merges | the `git` CLI, behind a small API so gitoxide can replace hot paths later |
 | git transport | Smart HTTP (`git-upload-pack`/`git-receive-pack --stateless-rpc`); SSH server that dispatches to the same | axum, russh |
 | db | Users, orgs, repos metadata, issues, PRs, reviews, CI runs, sync mappings | sqlx + SQLite (Postgres later) |
 | jobs | Durable queue in the DB: webhooks, sync, CI dispatch, agent tasks, indexing | tokio tasks over a `jobs` table |
@@ -69,8 +69,11 @@ later.
 
 ## Omarchy integration
 
-- The UI theme is built from CSS tokens. One theme can be generated from the active
-  Omarchy theme (`~/.config/omarchy/current/theme`).
+- The UI's colors are CSS variables generated from an Omarchy `colors.toml`. By default
+  omaforge follows the active Omarchy theme (`~/.local/state/omarchy/current/theme/colors.toml`)
+  and re-reads it on every request, so `omarchy theme set` shows up on reload. Without
+  Omarchy it uses built-in Tokyo Night (dark) and Catppuccin Latte (light).
+  `--theme builtin|omarchy|<path>` overrides this.
 - An `oma` CLI handles clone, PRs, issues and CI logs. It may wrap `gh` (pointed at
   omaforge) at first.
 - A native Qt desktop client can come later, built the Omarchy-app way.

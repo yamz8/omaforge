@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="toolbar">
+  {% include "ref_picker.html" %}
+  <div class="breadcrumbs">
+    <a href="{{ root_url }}">{{ repo.name }}</a>
+    {% for c in crumbs %} / <a href="{{ c.url }}">{{ c.name }}</a>{% endfor %} / <strong>{{ name }}</strong>
+  </div>
+</div>
+<div class="box">
+  {% include "latest_commit.html" %}
+  <div class="box-header">
+    <span class="muted">{% if let Some(lines) = code %}{{ lines.len() }} line{% if lines.len() != 1 %}s{% endif %} · {% endif %}{{ size }}</span>
+    <span class="spacer"></span>
+    {% if let Some((_, source_url)) = markdown %}<a class="button" href="{{ source_url }}">Code</a>{% endif %}
+    {% if let Some(url) = rendered_url %}<a class="button" href="{{ url }}">Preview</a>{% endif %}
+    <a class="button" href="{{ history_url }}">History</a>
+    <a class="button" href="{{ raw_url }}">Raw</a>
+  </div>
+  {% if let Some(lines) = code %}
+  <div class="code">
+    <div class="numbers">{% for _line in lines %}<a id="L{{ loop.index }}" href="#L{{ loop.index }}">{{ loop.index }}</a>{% endfor %}</div>
+    <pre><code>{% for line in lines %}<span class="line">{{ line|safe }}</span>{% endfor %}</code></pre>
+  </div>
+  {% else if let Some((html, _)) = markdown %}
+  <div class="box-body markdown">{{ html|safe }}</div>
+  {% else if let Some(url) = image_url %}
+  <div class="image-view"><img src="{{ url }}" alt="{{ name }}"></div>
+  {% else if let Some(notice) = notice %}
+  <div class="empty-state">{{ notice }} <a href="{{ raw_url }}">View raw</a></div>
+  {% endif %}
+</div>
+{% endblock %}

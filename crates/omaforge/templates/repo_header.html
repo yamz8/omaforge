@@ -1,0 +1,12 @@
+<div class="repo-title">
+  {{ crate::web::icons::BOOK|safe }}
+  <a href="/{{ repo.owner }}">{{ repo.owner }}</a><span class="sep">/</span><a href="{{ repo.url }}"><strong>{{ repo.name }}</strong></a>
+  {% if repo.is_private %}<span class="badge">{{ crate::web::icons::LOCK|safe }} Private</span>{% else %}<span class="badge">Public</span>{% endif %}
+</div>
+{% if !repo.description.is_empty() %}<p class="repo-description">{{ repo.description }}</p>{% endif %}
+<nav class="tabs">
+  <a href="{{ repo.url }}"{% if repo.tab == "code" %} class="active"{% endif %}>{{ crate::web::icons::CODE|safe }}Code</a>
+  <a href="{{ repo.url }}/commits"{% if repo.tab == "commits" %} class="active"{% endif %}>{{ crate::web::icons::HISTORY|safe }}Commits</a>
+  <a href="{{ repo.url }}/branches"{% if repo.tab == "branches" %} class="active"{% endif %}>{{ crate::web::icons::BRANCH|safe }}Branches</a>
+  <a href="{{ repo.url }}/tags"{% if repo.tab == "tags" %} class="active"{% endif %}>{{ crate::web::icons::TAG|safe }}Tags</a>
+</nav>

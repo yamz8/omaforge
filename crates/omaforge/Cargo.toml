@@ -24,3 +24,9 @@ tokio-util = { version = "0.7.20", features = ["io"] }
 tower-http = { version = "0.7.1", features = ["decompression-gzip", "trace"] }
 getrandom = "0.4.3"
 russh = "0.64.1"
+askama = "0.16.1"
+ammonia = "4.2.4"
+toml = "1.1.8"
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+comrak = { version = "0.57.0", default-features = false }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-default-fancy"] }

@@ -1,0 +1,13 @@
+<details class="menu">
+  <summary class="button">{{ crate::web::icons::BRANCH|safe }}{{ picker.current }}</summary>
+  <div class="menu-body">
+    {% if !picker.branches.is_empty() %}
+    <div class="menu-title">Branches</div>
+    {% for r in picker.branches %}<a href="{{ r.url }}"{% if r.current %} class="current"{% endif %}>{{ r.name }}</a>{% endfor %}
+    {% endif %}
+    {% if !picker.tags.is_empty() %}
+    <div class="menu-title">Tags</div>
+    {% for r in picker.tags %}<a href="{{ r.url }}"{% if r.current %} class="current"{% endif %}>{{ r.name }}</a>{% endfor %}
+    {% endif %}
+  </div>
+</details>

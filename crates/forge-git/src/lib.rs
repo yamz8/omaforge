@@ -1,5 +1,10 @@
 //! Git storage for omaforge: bare repositories on disk under `<data>/repos/<owner>/<name>.git`.
 
+pub mod diff;
+mod read;
+
+pub use read::{clean_path, Blob, Commit, EntryKind, ObjectKind, Ref, Repository, TreeEntry};
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

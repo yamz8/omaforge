@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Commits · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="toolbar">
+  {% include "ref_picker.html" %}
+  {% if !path.is_empty() %}<div class="breadcrumbs">History for <a href="{{ path_url }}"><strong>{{ path }}</strong></a></div>{% endif %}
+</div>
+{% if groups.is_empty() %}
+<div class="box"><div class="empty-state">No commits.</div></div>
+{% endif %}
+{% for group in groups %}
+<section class="commit-group">
+  <h3>Commits on {{ group.date }}</h3>
+  <div class="box">
+    <ul class="commit-list">
+      {% for c in group.commits %}
+      <li>
+        <div class="summary">
+          <a class="subject" href="{{ c.url }}">{{ c.subject }}</a>
+          <div class="meta"><strong>{{ c.author }}</strong> committed <span title="{{ c.timestamp }}">{{ c.time_ago }}</span></div>
+        </div>
+        <span class="sha-cell"><a class="sha" href="{{ c.url }}">{{ c.short_id }}</a></span>
+        <a class="button" href="{{ c.browse_url }}" title="Browse files at this commit">{{ crate::web::icons::CODE|safe }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endfor %}
+{% if newer_url.is_some() || older_url.is_some() %}
+<div class="pager">
+  {% if let Some(url) = newer_url %}<a class="button" href="{{ url }}">Newer</a>{% endif %}
+  {% if let Some(url) = older_url %}<a class="button" href="{{ url }}">Older</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

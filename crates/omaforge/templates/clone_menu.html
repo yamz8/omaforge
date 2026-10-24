@@ -1,0 +1,7 @@
+<details class="menu right">
+  <summary class="button">{{ crate::web::icons::CODE|safe }}Clone</summary>
+  <div class="menu-body clone-body">
+    <label>HTTPS<input readonly value="{{ repo.http_clone }}" onclick="this.select()"></label>
+    {% if let Some(ssh) = repo.ssh_clone %}<label>SSH<input readonly value="{{ ssh }}" onclick="this.select()"></label>{% endif %}
+  </div>
+</details>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · omaforge{% endblock %}
+{% block content %}
+<div class="error-page">
+  <h1>{{ status }}</h1>
+  <p class="muted">{{ message }}</p>
+  <p><a href="/">Back to repositories</a></p>
+</div>
+{% endblock %}

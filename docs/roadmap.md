@@ -10,8 +10,10 @@ Each milestone should be something you can use day to day before the next one st
 - [x] Create repos (bare, on disk), with public/private visibility (CLI)
 - [x] Clone/push over smart HTTP (protocol v0 and v2)
 - [x] Clone/push over SSH (built-in server, protocol v0 and v2)
-- [ ] Code browser: tree, file view with syntax highlighting, README rendering, commits, a single commit diff, branches/tags
-- [ ] Omarchy-themed UI tokens
+- [x] Code browser: tree, file view with syntax highlighting, README rendering, commits, a single commit diff, branches/tags
+- [x] Omarchy-themed UI (follows the active Omarchy theme live)
+- [ ] Code browser for private repos (needs web login)
+- [ ] Blame, compare views, syntax-highlighted diffs
 
 ## M1: Collaborate
 - [ ] Issues: markdown, labels, assignees, comments, references (`#12`, `fixes #12`)

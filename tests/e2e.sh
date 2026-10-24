@@ -7,7 +7,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BIN=${OMAFORGE_BIN:-$ROOT/target/debug/omaforge}
 W=${1:-$(mktemp -d)}
 rm -rf "$W" && mkdir -p "$W" && cd "$W" || exit 1
+# Isolate git completely: a temporary HOME is not enough, because with XDG_CONFIG_HOME set
+# `git config --global` writes to the real ~/.config/git/config.
+unset XDG_CONFIG_HOME
 export OMAFORGE_DATA=$W/data GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 HOME=$W/home
+export GIT_CONFIG_GLOBAL=$W/gitconfig
 mkdir -p "$HOME"
 git config --global user.name test
 git config --global user.email test@example.com
@@ -120,6 +124,29 @@ kill $SERVER; wait $SERVER 2>/dev/null
 start_server
 FP2=$(ssh-keyscan -p $SSH_PORT 127.0.0.1 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
 check "host key stable on restart" bash -c "[ -n '$FP1' ] && [ '$FP1' = '$FP2' ]"
+
+echo "== Web"
+page() { curl -s "$URL$1"; }
+status() { curl -s -o /dev/null -w '%{http_code}' "$URL$1"; }
+(cd src && git pull -q --ff-only $URL/alice/hello.git main && printf '\000\001binary' >small.bin && printf '# Hello\n\n![logo](img/logo.png) [notes](docs/notes.md)\n\n<script>alert(1)</script>\n\n```rust\nfn main() {}\n```\n' >README.md \
+    && git add README.md small.bin && git commit -qm "Add README" && git push -q http://alice:$TOKEN@127.0.0.1:$PORT/alice/hello.git main)
+check "index lists public repo"     bash -c "curl -s $URL/ | grep -q 'alice/hello' && ! curl -s $URL/ | grep -q 'alice/secret'"
+check "repo home renders README"    bash -c "curl -s $URL/alice/hello | grep -q '<h1 id=\"user-content-hello\"'"
+check "README script stripped"      bash -c "! curl -s $URL/alice/hello | grep -q '<script>alert'"
+check "README links rewritten"      bash -c "curl -s $URL/alice/hello | grep -q 'href=\"/alice/hello/blob/main/docs/notes.md\"' && curl -s $URL/alice/hello | grep -q 'src=\"/alice/hello/raw/main/img/logo.png\"'"
+check "README code highlighted"     bash -c "curl -s $URL/alice/hello | grep -q 'class=\"hl-'"
+check "private repo hidden on web"  test "$(status /alice/secret)" = 404
+check "file view"                   bash -c "curl -s $URL/alice/hello/blob/main/file.txt | grep -q 'line 200'"
+check "raw is text/plain, sandboxed" bash -c "curl -sI $URL/alice/hello/raw/main/file.txt | grep -qi 'content-type: text/plain' && curl -sI $URL/alice/hello/raw/main/file.txt | grep -qi 'content-security-policy: .*sandbox'"
+check "binary file not inlined"     bash -c "curl -s $URL/alice/hello/blob/main/small.bin | grep -q 'Binary file not shown'"
+check "large file not inlined"      bash -c "curl -s $URL/alice/hello/blob/main/blob.bin | grep -q 'too large to display'"
+check "history paginates"           bash -c "curl -s $URL/alice/hello/commits/main | grep -q 'page=2' && curl -s '$URL/alice/hello/commits/main?page=2' | grep -q 'Newer'"
+check "file history"                bash -c "curl -s $URL/alice/hello/commits/main/blob.bin | grep -q '>blob<'"
+check "commit diff"                 bash -c "curl -s $URL/alice/hello/commit/\$(git -C src rev-parse HEAD) | grep -q 'README.md'"
+check "tag tree"                    test "$(status /alice/hello/tree/v1)" = 200
+check "web path traversal 404"      test "$(status '/alice/hello/tree/main/..%2F..%2Fetc')" = 404
+check "dir as blob redirects"       test "$(status /alice/hello/blob/main)" = 303
+check "theme css served"            bash -c "curl -s $URL/assets/theme.css | grep -q -- '--accent:'"
 
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then

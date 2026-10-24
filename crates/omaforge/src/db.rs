@@ -20,7 +20,15 @@ pub struct Repo {
     /// Canonical owner username, used for the on-disk path.
     pub owner_name: String,
     pub name: String,
+    pub description: String,
     pub is_private: bool,
+}
+
+/// The columns of [`Repo`], for `SELECT ... FROM repos r JOIN users u ON u.id = r.owner_id`.
+macro_rules! repo_columns {
+    () => {
+        "r.owner_id, u.username AS owner_name, r.name, r.description, r.is_private"
+    };
 }
 
 /// Open (creating if needed) the database in `data` and run pending migrations.
@@ -124,11 +132,11 @@ pub async fn create_repo(
 }
 
 pub async fn repo_by_path(db: &SqlitePool, owner: &str, name: &str) -> Result<Option<Repo>> {
-    let repo = sqlx::query_as(
-        "SELECT r.owner_id, u.username AS owner_name, r.name, r.is_private
-         FROM repos r JOIN users u ON u.id = r.owner_id
-         WHERE u.username = ? AND r.name = ?",
-    )
+    let repo = sqlx::query_as(concat!(
+        "SELECT ",
+        repo_columns!(),
+        " FROM repos r JOIN users u ON u.id = r.owner_id WHERE u.username = ? AND r.name = ?"
+    ))
     .bind(owner)
     .bind(name)
     .fetch_optional(db)
@@ -176,6 +184,36 @@ pub async fn user_by_ssh_fingerprint(db: &SqlitePool, fingerprint: &str) -> Resu
 pub async fn touch_ssh_key(db: &SqlitePool, fingerprint: &str) -> Result<()> {
     sqlx::query("UPDATE ssh_keys SET last_used_at = CURRENT_TIMESTAMP WHERE fingerprint = ?")
         .bind(fingerprint)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Public repos, optionally only those of one owner, alphabetically.
+pub async fn public_repos(db: &SqlitePool, owner: Option<&str>) -> Result<Vec<Repo>> {
+    let repos = sqlx::query_as(concat!(
+        "SELECT ",
+        repo_columns!(),
+        " FROM repos r JOIN users u ON u.id = r.owner_id
+         WHERE r.is_private = 0 AND (?1 IS NULL OR u.username = ?1)
+         ORDER BY u.username, r.name"
+    ))
+    .bind(owner)
+    .fetch_all(db)
+    .await?;
+    Ok(repos)
+}
+
+pub async fn set_repo_description(
+    db: &SqlitePool,
+    owner_id: i64,
+    name: &str,
+    description: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE repos SET description = ? WHERE owner_id = ? AND name = ?")
+        .bind(description)
+        .bind(owner_id)
+        .bind(name)
         .execute(db)
         .await?;
     Ok(())
