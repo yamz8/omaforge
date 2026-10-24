@@ -148,6 +148,58 @@ check "web path traversal 404"      test "$(status '/alice/hello/tree/main/..%2F
 check "dir as blob redirects"       test "$(status /alice/hello/blob/main)" = 303
 check "theme css served"            bash -c "curl -s $URL/assets/theme.css | grep -q -- '--accent:'"
 
+echo "== Web sign-in"
+A=$W/alice.jar B=$W/bob.jar A2=$W/alice2.jar
+# csrf <jar> <path>: the CSRF token from a page's forms.
+csrf() { curl -s -b "$1" "$URL$2" | grep -m1 -o 'name="csrf" value="[0-9a-f]*"' | grep -o '[0-9a-f]\{64\}'; }
+# post <jar> <path> <form...>: POST a form, print "<status> <location>".
+post() { local jar=$1 path=$2; shift 2; curl -s -o "$W/post.html" -w '%{http_code} %{redirect_url}' -b "$jar" -c "$jar" "${@/#/--data-urlencode=}" "$URL$path"; }
+check "settings needs sign-in"      bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' $URL/settings/keys)\" = '303 $URL/login?next=/settings/keys' ]"
+check "wrong password rejected"     bash -c "[ \"\$(curl -s -c $A --data 'login=alice&password=nope' -o $W/p.html -w '%{http_code}' $URL/login)\" = 200 ] && grep -q 'Incorrect username or password' $W/p.html"
+check "unknown user rejected"       bash -c "curl -s --data 'login=nobody&password=whatever1' $URL/login | grep -q 'Incorrect username or password'"
+check "sign in redirects to next"   bash -c "[ \"\$(curl -s -c $A --data 'login=alice&password=alicepassword&next=/alice/secret' -o /dev/null -w '%{redirect_url}' $URL/login)\" = '$URL/alice/secret' ]"
+check "session cookie is HttpOnly"  bash -c "curl -s -D - -o /dev/null --data 'login=alice&password=alicepassword' $URL/login | grep -i '^set-cookie: omaforge_session=' | grep -i httponly | grep -qi 'samesite=lax'"
+check "no open redirect"            bash -c "[ \"\$(curl -s --data 'login=alice&password=alicepassword&next=//evil.example' -o /dev/null -w '%{redirect_url}' $URL/login)\" = '$URL/' ]"
+check "index shows own private repo" bash -c "curl -s -b $A $URL/ | grep -q 'alice/secret'"
+check "owner sees private repo"     test "$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/secret)" = 200
+curl -s -c $B --data 'login=bob&password=bobpassword1' -o /dev/null $URL/login
+check "other user can't see it"     bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $B $URL/alice/secret) = 404 ] && ! curl -s -b $B $URL/ | grep -q 'alice/secret'"
+check "form without CSRF refused"   bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -b $A --data 'csrf=0000&name=x' $URL/settings/tokens)\" = 403 ]"
+check "bob's CSRF fails for alice"  bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -b $A --data \"csrf=\$(csrf $B /settings/tokens)&name=x\" $URL/settings/tokens)\" = 403 ]"
+WEB_TOKEN=$(curl -s -b $A --data "csrf=$(csrf $A /settings/tokens)&name=web" $URL/settings/tokens | grep -o 'omf_[0-9a-f]\{64\}')
+check "token created on web"        test -n "$WEB_TOKEN"
+check "web token clones private"    git clone -q http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/secret.git web-secret
+ssh-keygen -q -t ed25519 -N '' -C carol@test -f "$W/carol"
+db() { sqlite3 "$OMAFORGE_DATA/omaforge.db" "$1"; }
+R=$(post $A /settings/keys csrf=$(csrf $A /settings/keys) name=carol "key=$(cat $W/carol.pub)")
+check "SSH key added on web"        test "$R" = "303 $URL/settings/keys"
+check "web key works over SSH"      env GIT_SSH_COMMAND="$(ssh_as carol)" git clone -q $SSH_URL/alice/secret.git web-ssh
+post $A /settings/keys csrf=$(csrf $A /settings/keys) name=junk key=nonsense >/dev/null
+check "bad SSH key shows an error"  grep -q 'look like an OpenSSH public key' $W/post.html
+KEY_ID=$(db "select id from ssh_keys where name='carol'")
+post $B /settings/keys/$KEY_ID/delete csrf=$(csrf $B /settings/keys) >/dev/null
+check "bob can't delete alice's key" test "$(db "select count(*) from ssh_keys where id=$KEY_ID")" = 1
+post $A /settings/keys/$KEY_ID/delete csrf=$(csrf $A /settings/keys) >/dev/null
+check "alice deletes her key"       test "$(db "select count(*) from ssh_keys where id=$KEY_ID")" = 0
+refuse "deleted key can't SSH"      env GIT_SSH_COMMAND="$(ssh_as carol)" git clone -q $SSH_URL/alice/secret.git web-ssh2
+R=$(post $A /new csrf=$(csrf $A /new) name=made-on-web "description=From the browser" visibility=private)
+check "create repo on web"          test "$R" = "303 $URL/alice/made-on-web"
+check "new repo is private"         bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/made-on-web) = 404 ] && curl -s -b $A $URL/alice/made-on-web | grep -q 'This repository is empty'"
+check "push to web-made repo"       git -C src push -q http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/made-on-web.git main
+post $A /new csrf=$(csrf $A /new) name=made-on-web description= visibility=public >/dev/null
+check "duplicate repo name refused" grep -q 'already exists' $W/post.html
+post $A /new csrf=$(csrf $A /new) name=../x description= visibility=public >/dev/null
+check "bad repo name refused"       grep -q 'Use letters, numbers' $W/post.html
+curl -s -c $A2 --data 'login=alice&password=alicepassword' -o /dev/null $URL/login
+post $A /settings/password csrf=$(csrf $A /settings/password) current=alicepassword new=newpassword9 confirm=newpassword9 >/dev/null
+check "password change"             grep -q 'Password changed' $W/post.html
+check "other sessions signed out"   bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $A2 $URL/alice/secret) = 404 ] && [ \$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/secret) = 200 ]"
+check "new password works for git"  git ls-remote -q http://alice:newpassword9@127.0.0.1:$PORT/alice/secret.git
+refuse "old password doesn't"       git ls-remote -q http://alice:alicepassword@127.0.0.1:$PORT/alice/secret.git
+post $A /logout csrf=$(csrf $A /settings/keys) >/dev/null
+check "sign out"                    test "$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/secret)" = 404
+check "signed-out cookie is dead"   test "$(db "select count(*) from sessions s join users u on u.id = s.user_id where u.username = 'alice'")" = 0
+
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
     echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10

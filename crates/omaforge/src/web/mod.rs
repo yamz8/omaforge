@@ -3,22 +3,36 @@
 mod icons;
 pub mod render;
 mod repo;
+mod session;
+mod settings;
 mod theme;
 
+pub use session::Viewer;
 pub use theme::Theme;
 
 use askama::Template;
 use axum::{
     extract::State,
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Response},
-    routing::get,
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::{get, post},
     Router,
 };
 
 use crate::AppState;
 
 const STYLE: &str = include_str!("../../assets/style.css");
+
+/// The stylesheet's URL, versioned by content so it can be cached forever and still
+/// update the moment omaforge does.
+pub fn style_url() -> &'static str {
+    static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+        let hash = hex::encode(Sha256::digest(STYLE.as_bytes()));
+        format!("/assets/style.css?v={}", &hash[..12])
+    })
+}
 
 /// Public-facing settings the pages need.
 pub struct Site {
@@ -49,6 +63,27 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(repo::index))
         .route("/assets/style.css", get(style))
         .route("/assets/theme.css", get(theme_css))
+        .route("/login", get(session::login_form).post(session::login))
+        .route("/logout", post(session::logout))
+        .route(
+            "/new",
+            get(settings::new_repo_form).post(settings::create_repo),
+        )
+        .route("/settings", get(settings::index))
+        .route(
+            "/settings/keys",
+            get(settings::keys).post(settings::add_key),
+        )
+        .route("/settings/keys/{id}/delete", post(settings::delete_key))
+        .route(
+            "/settings/tokens",
+            get(settings::tokens).post(settings::create_token),
+        )
+        .route("/settings/tokens/{id}/delete", post(settings::delete_token))
+        .route(
+            "/settings/password",
+            get(settings::password).post(settings::change_password),
+        )
         .route("/{owner}", get(repo::owner))
         .route("/{owner}/{repo}", get(repo::home))
         .route("/{owner}/{repo}/tree/{*rest}", get(repo::tree))
@@ -66,7 +101,7 @@ async fn style() -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=300"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
         STYLE,
     )
@@ -84,6 +119,10 @@ async fn theme_css(State(state): State<AppState>) -> impl IntoResponse {
 
 pub enum WebError {
     NotFound,
+    /// Needs a signed-in user; sign in and come back to this path.
+    SignIn(String),
+    /// A form without a valid CSRF token.
+    Forbidden,
     Internal(anyhow::Error),
 }
 
@@ -96,6 +135,7 @@ impl<E: Into<anyhow::Error>> From<E> for WebError {
 #[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorPage {
+    viewer: Viewer,
     status: u16,
     message: &'static str,
 }
@@ -103,6 +143,14 @@ struct ErrorPage {
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            Self::SignIn(next) => {
+                let next: String = form_urlencode(&next);
+                return Redirect::to(&format!("/login?next={next}")).into_response();
+            }
+            Self::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "This form expired or didn't come from omaforge. Go back, reload the page and try again.",
+            ),
             Self::NotFound => (
                 StatusCode::NOT_FOUND,
                 "This page doesn't exist, or you don't have access to it.",
@@ -116,6 +164,7 @@ impl IntoResponse for WebError {
             }
         };
         let page = ErrorPage {
+            viewer: Viewer::default(),
             status: status.as_u16(),
             message,
         };
@@ -131,4 +180,17 @@ pub type WebResult<T = Response> = Result<T, WebError>;
 
 fn page(template: impl Template) -> WebResult {
     Ok(Html(template.render()?).into_response())
+}
+
+/// Encode a value for a query string.
+fn form_urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }

@@ -90,6 +90,67 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
 .button:hover { text-decoration: none; border-color: var(--dim); }
 .empty-state { padding: 48px 24px; text-align: center; color: var(--dim); }
 
+/* ---- Forms ---- */
+
+.page-heading { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+.page-heading .page-title { margin: 0; flex: 1; }
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--background); }
+.button.primary:hover { border-color: var(--strong); }
+.button.danger { color: var(--red); background: transparent; }
+.button.danger:hover { border-color: var(--red); }
+.button.wide { width: 100%; justify-content: center; padding: 6px 12px; }
+.narrow { max-width: 380px; margin: 40px auto 0; }
+.narrow.wide-narrow { max-width: 640px; margin-top: 8px; }
+.center { text-align: center; }
+.small { font-size: 13px; }
+
+.form { display: grid; gap: 16px; padding: 20px; }
+.form label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; color: var(--strong); }
+.form input:not([type=radio]):not([type=hidden]), .form textarea, .new-token input {
+  width: 100%; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--strong);
+  font: 14px var(--sans);
+}
+.form textarea { font: 12px/1.5 var(--mono); resize: vertical; }
+.form input:focus, .form textarea:focus, .new-token input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -1px; border-color: var(--accent); }
+.form fieldset { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.form label.choice { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
+.form label.choice input { margin-top: 4px; accent-color: var(--accent); }
+.form > .button { justify-self: start; }
+.inline-form { grid-template-columns: 1fr auto; align-items: end; }
+.prefixed { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.prefixed .prefix { padding: 0 4px 0 10px; color: var(--dim); font-weight: 400; white-space: nowrap; }
+.form .prefixed input:not([type=radio]) { border: 0; padding-left: 4px; background: transparent; }
+.form .prefixed input:focus { outline: none; }
+.prefixed:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -1px; border-color: var(--accent); }
+.new-token input { font-family: var(--mono); font-size: 13px; }
+.flash { margin: 0 0 16px; padding: 10px 14px; border-radius: 6px; border: 1px solid; font-size: 14px; }
+.form .flash { margin: 0; }
+.flash.error { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.flash.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); }
+
+.menu-body form { margin: 0; border-top: 1px solid var(--line); }
+.menu-body .menu-item { display: block; width: 100%; padding: 6px 12px; border: 0; background: none; color: var(--fg); font: 13px var(--sans); text-align: left; cursor: pointer; }
+.menu-body .menu-item:hover { background: var(--raised); }
+
+/* ---- Settings ---- */
+
+.settings { display: grid; grid-template-columns: 200px 1fr; gap: 32px; }
+.side-nav { display: grid; align-content: start; gap: 2px; }
+.side-nav a { padding: 6px 10px; border-radius: 6px; color: var(--fg); }
+.side-nav a:hover { background: var(--panel); text-decoration: none; }
+.side-nav a.active { background: var(--raised); color: var(--strong); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.settings-body h2 { font-size: 16px; margin: 28px 0 10px; }
+.settings-body > p.muted { margin-top: -8px; }
+.credential-list { list-style: none; margin: 0; padding: 0; }
+.credential-list li { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.credential-list li:first-child { border-top: 0; }
+.credential-list .summary { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.credential-list .meta { font-size: 13px; color: var(--dim); }
+.new-token { margin-bottom: 16px; border-color: var(--green); }
+.new-token p { margin: 0 0 8px; }
+
 /* ---- Repo list ---- */
 
 .page-title { margin: 0 0 16px; font-size: 20px; }
@@ -281,6 +342,10 @@ details.menu.right .menu-body { left: auto; right: 0; }
 
 @media (max-width: 640px) {
   .box-body { padding: 16px; }
+  .settings { grid-template-columns: 1fr; gap: 16px; }
+  .side-nav { grid-auto-flow: column; justify-content: start; overflow-x: auto; }
+  .inline-form { grid-template-columns: 1fr; }
+  .site-header nav { display: none; }
   .files .size, .commit-list .sha-cell { display: none; }
   .site-header { gap: 16px; }
 }

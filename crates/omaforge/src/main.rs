@@ -236,7 +236,7 @@ async fn admin(state: &AppState, command: AdminCommand) -> Result<()> {
         AdminCommand::CreateRepo { repo, private } => {
             let (owner, name) = split_repo(&repo)?;
             let owner = find_user(state, owner).await?;
-            db::create_repo(&state.db, &state.repos, &owner, name, private).await?;
+            db::create_repo(&state.db, &state.repos, &owner, name, "", private).await?;
             println!("created {}/{name}", owner.username);
         }
         AdminCommand::SetDescription { repo, description } => {

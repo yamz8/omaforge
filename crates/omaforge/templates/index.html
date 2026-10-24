@@ -1,18 +1,21 @@
 {% extends "base.html" %}
 {% block title %}{% if let Some(owner) = owner %}{{ owner }}{% else %}Repositories{% endif %} · omaforge{% endblock %}
 {% block content %}
-<h1 class="page-title">{% if let Some(owner) = owner %}{{ owner }}{% else %}Repositories{% endif %}</h1>
+<div class="page-heading">
+  <h1 class="page-title">{% if let Some(owner) = owner %}{{ owner }}{% else %}Repositories{% endif %}</h1>
+  {% if viewer.user.is_some() %}<a class="button primary" href="/new">New repository</a>{% endif %}
+</div>
 <div class="box">
   {% if repos.is_empty() %}
   <div class="empty-state">
-    <p>No public repositories yet.</p>
-    <p class="mono">omaforge admin create-repo &lt;owner&gt;/&lt;name&gt;</p>
+    <p>No repositories yet.</p>
+    {% if viewer.user.is_some() %}<p><a class="button primary" href="/new">Create one</a></p>{% else %}<p><a href="/login">Sign in</a> to create one.</p>{% endif %}
   </div>
   {% else %}
   <ul class="repo-list">
     {% for repo in repos %}
     <li>
-      <a class="name" href="{{ repo.url }}">{{ repo.full_name }}</a>
+      <a class="name" href="{{ repo.url }}">{{ repo.full_name }}</a>{% if repo.is_private %} <span class="badge">{{ crate::web::icons::LOCK|safe }} Private</span>{% endif %}
       {% if !repo.description.is_empty() %}<p>{{ repo.description }}</p>{% endif %}
       {% if let Some(updated) = repo.updated %}<p class="muted">Updated {{ updated }}</p>{% else %}<p class="muted">Empty</p>{% endif %}
     </li>

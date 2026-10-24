@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in · omaforge{% endblock %}
+{% block content %}
+<div class="narrow">
+  <h1 class="page-title center">Sign in to omaforge</h1>
+  <form class="box form" method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+    <label>Username or email<input name="login" value="{{ login }}" autocomplete="username" autocapitalize="none" autofocus required></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="button primary wide" type="submit">Sign in</button>
+  </form>
+  <p class="muted center small">Accounts are created by the administrator.</p>
+</div>
+{% endblock %}

@@ -65,6 +65,26 @@ pub async fn create_user(
     Ok(id)
 }
 
+/// Find a user by username or email, for signing in.
+pub async fn user_by_login(db: &SqlitePool, login: &str) -> Result<Option<User>> {
+    let user = sqlx::query_as(
+        "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?1 OR email = ?1",
+    )
+    .bind(login)
+    .fetch_optional(db)
+    .await?;
+    Ok(user)
+}
+
+pub async fn set_password(db: &SqlitePool, user_id: i64, password_hash: &str) -> Result<()> {
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(password_hash)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn user_by_username(db: &SqlitePool, username: &str) -> Result<Option<User>> {
     let user = sqlx::query_as(
         "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
@@ -115,17 +135,25 @@ pub async fn create_repo(
     repos_root: &Path,
     owner: &User,
     name: &str,
+    description: &str,
     is_private: bool,
 ) -> Result<i64> {
     let mut tx = db.begin().await?;
     let id = sqlx::query_scalar(
-        "INSERT INTO repos (owner_id, name, is_private) VALUES (?, ?, ?) RETURNING id",
+        "INSERT INTO repos (owner_id, name, description, is_private) VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(owner.id)
     .bind(name)
+    .bind(description)
     .bind(is_private)
     .fetch_one(&mut *tx)
-    .await?;
+    .await
+    .map_err(|error| match error {
+        sqlx::Error::Database(e) if e.is_unique_violation() => {
+            anyhow::anyhow!("{}/{name} already exists", owner.username)
+        }
+        error => error.into(),
+    })?;
     forge_git::create_bare(repos_root, &owner.username, name)?;
     tx.commit().await?;
     Ok(id)
@@ -189,16 +217,23 @@ pub async fn touch_ssh_key(db: &SqlitePool, fingerprint: &str) -> Result<()> {
     Ok(())
 }
 
-/// Public repos, optionally only those of one owner, alphabetically.
-pub async fn public_repos(db: &SqlitePool, owner: Option<&str>) -> Result<Vec<Repo>> {
+/// Repos `viewer` may see (public ones, their own, or all for admins), optionally only
+/// those of one owner, alphabetically. Must agree with `auth::can_read`.
+pub async fn visible_repos(
+    db: &SqlitePool,
+    viewer: Option<&User>,
+    owner: Option<&str>,
+) -> Result<Vec<Repo>> {
     let repos = sqlx::query_as(concat!(
         "SELECT ",
         repo_columns!(),
         " FROM repos r JOIN users u ON u.id = r.owner_id
-         WHERE r.is_private = 0 AND (?1 IS NULL OR u.username = ?1)
+         WHERE (r.is_private = 0 OR ?2 OR r.owner_id = ?3) AND (?1 IS NULL OR u.username = ?1)
          ORDER BY u.username, r.name"
     ))
     .bind(owner)
+    .bind(viewer.is_some_and(|v| v.is_admin))
+    .bind(viewer.map(|v| v.id))
     .fetch_all(db)
     .await?;
     Ok(repos)
@@ -214,6 +249,124 @@ pub async fn set_repo_description(
         .bind(description)
         .bind(owner_id)
         .bind(name)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+// ---- Sessions ----
+
+pub async fn create_session(
+    db: &SqlitePool,
+    user_id: i64,
+    token_hash: &str,
+    csrf_token: &str,
+    days: u32,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at)
+         VALUES (?, ?, ?, datetime('now', '+' || ? || ' days'))",
+    )
+    .bind(user_id)
+    .bind(token_hash)
+    .bind(csrf_token)
+    .bind(days)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The signed-in user and CSRF token for an unexpired session.
+pub async fn session_user(db: &SqlitePool, token_hash: &str) -> Result<Option<(User, String)>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        #[sqlx(flatten)]
+        user: User,
+        csrf_token: String,
+    }
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT u.id, u.username, u.password_hash, u.is_admin, s.csrf_token
+         FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash = ? AND s.expires_at > datetime('now')",
+    )
+    .bind(token_hash)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|row| (row.user, row.csrf_token)))
+}
+
+pub async fn delete_session(db: &SqlitePool, token_hash: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
+        .bind(token_hash)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Sign a user out everywhere except, optionally, one session (after a password change).
+pub async fn delete_user_sessions(db: &SqlitePool, user_id: i64, keep: Option<&str>) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE user_id = ? AND token_hash IS NOT ?")
+        .bind(user_id)
+        .bind(keep)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_expired_sessions(db: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+// ---- Keys and tokens, as listed in settings ----
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Credential {
+    pub id: i64,
+    pub name: String,
+    /// The SSH key fingerprint; empty for tokens.
+    pub fingerprint: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+pub async fn ssh_keys(db: &SqlitePool, user_id: i64) -> Result<Vec<Credential>> {
+    let keys = sqlx::query_as(
+        "SELECT id, name, fingerprint, created_at, last_used_at FROM ssh_keys
+         WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(keys)
+}
+
+pub async fn delete_ssh_key(db: &SqlitePool, user_id: i64, id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM ssh_keys WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn tokens(db: &SqlitePool, user_id: i64) -> Result<Vec<Credential>> {
+    let tokens = sqlx::query_as(
+        "SELECT id, name, '' AS fingerprint, created_at, last_used_at FROM tokens
+         WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(tokens)
+}
+
+pub async fn delete_token(db: &SqlitePool, user_id: i64, id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM tokens WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
         .execute(db)
         .await?;
     Ok(())

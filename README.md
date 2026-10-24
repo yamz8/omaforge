@@ -24,7 +24,9 @@ Run the end-to-end tests (real server, real git over HTTP and SSH) with:
 cargo build && tests/e2e.sh
 ```
 
-Open http://127.0.0.1:3000 to browse. The UI follows your active Omarchy theme
+Open http://127.0.0.1:3000 to browse, and sign in to see private repos, create
+repositories and manage SSH keys and access tokens under Settings. Accounts are
+created with `admin create-user`. The UI follows your active Omarchy theme
 (`--theme builtin|omarchy|<colors.toml>` to choose), and `--public-url` sets the
 URL used in clone instructions.
 

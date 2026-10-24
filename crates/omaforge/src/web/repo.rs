@@ -15,7 +15,7 @@ use serde::Deserialize;
 use super::{
     icons, page,
     render::{self, LinkBase},
-    WebError, WebResult,
+    Viewer, WebError, WebResult,
 };
 use crate::{auth, db, AppState};
 
@@ -72,6 +72,7 @@ struct CommitView {
 
 /// A repository someone may view, with its git directory opened.
 struct Loaded {
+    viewer: Viewer,
     repo: db::Repo,
     git: Repository,
     url: String,
@@ -167,14 +168,14 @@ impl Loaded {
     }
 }
 
-/// Load a repository the (anonymous, for now) viewer is allowed to see.
-async fn load(state: &AppState, owner: &str, name: &str) -> WebResult<Loaded> {
+/// Load a repository the viewer is allowed to see; anything else is "not found".
+async fn load(state: &AppState, viewer: Viewer, owner: &str, name: &str) -> WebResult<Loaded> {
     if !forge_git::is_valid_name(owner) || !forge_git::is_valid_name(name) {
         return Err(WebError::NotFound);
     }
     let repo = db::repo_by_path(&state.db, owner, name)
         .await?
-        .filter(|repo| auth::can_read(None, repo))
+        .filter(|repo| auth::can_read(viewer.user.as_ref(), repo))
         .ok_or(WebError::NotFound)?;
     let git = Repository::open(forge_git::repo_path(
         &state.repos,
@@ -182,7 +183,12 @@ async fn load(state: &AppState, owner: &str, name: &str) -> WebResult<Loaded> {
         &repo.name,
     ));
     let url = format!("/{}/{}", repo.owner_name, repo.name);
-    Ok(Loaded { repo, git, url })
+    Ok(Loaded {
+        viewer,
+        repo,
+        git,
+        url,
+    })
 }
 
 /// Split `rev/path/to/file` from a URL. Branch and tag names may contain slashes, so the
@@ -257,19 +263,25 @@ struct RepoListItem {
     full_name: String,
     url: String,
     description: String,
+    is_private: bool,
     updated: Option<String>,
 }
 
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
+    viewer: Viewer,
     owner: Option<String>,
     repos: Vec<RepoListItem>,
 }
 
-async fn repo_list(state: &AppState, owner: Option<&str>) -> WebResult<Vec<RepoListItem>> {
+async fn repo_list(
+    state: &AppState,
+    viewer: &Viewer,
+    owner: Option<&str>,
+) -> WebResult<Vec<RepoListItem>> {
     let mut items = Vec::new();
-    for repo in db::public_repos(&state.db, owner).await? {
+    for repo in db::visible_repos(&state.db, viewer.user.as_ref(), owner).await? {
         let git = Repository::open(forge_git::repo_path(
             &state.repos,
             &repo.owner_name,
@@ -284,25 +296,32 @@ async fn repo_list(state: &AppState, owner: Option<&str>) -> WebResult<Vec<RepoL
             full_name: format!("{}/{}", repo.owner_name, repo.name),
             url: format!("/{}/{}", repo.owner_name, repo.name),
             description: repo.description,
+            is_private: repo.is_private,
             updated,
         });
     }
     Ok(items)
 }
 
-pub async fn index(State(state): State<AppState>) -> WebResult {
+pub async fn index(State(state): State<AppState>, viewer: Viewer) -> WebResult {
     page(IndexPage {
+        repos: repo_list(&state, &viewer, None).await?,
+        viewer,
         owner: None,
-        repos: repo_list(&state, None).await?,
     })
 }
 
-pub async fn owner(State(state): State<AppState>, Path(owner): Path<String>) -> WebResult {
+pub async fn owner(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(owner): Path<String>,
+) -> WebResult {
     let user = db::user_by_username(&state.db, &owner)
         .await?
         .ok_or(WebError::NotFound)?;
     page(IndexPage {
-        repos: repo_list(&state, Some(&user.username)).await?,
+        repos: repo_list(&state, &viewer, Some(&user.username)).await?,
+        viewer,
         owner: Some(user.username),
     })
 }
@@ -312,6 +331,7 @@ pub async fn owner(State(state): State<AppState>, Path(owner): Path<String>) -> 
 #[derive(Template)]
 #[template(path = "empty.html")]
 struct EmptyPage {
+    viewer: Viewer,
     repo: RepoContext,
 }
 
@@ -331,6 +351,7 @@ struct ReadmeView {
 #[derive(Template)]
 #[template(path = "tree.html")]
 struct TreePage {
+    viewer: Viewer,
     repo: RepoContext,
     picker: RefPicker,
     crumbs: Vec<Crumb>,
@@ -344,14 +365,16 @@ struct TreePage {
 
 pub async fn home(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name)): Path<(String, String)>,
 ) -> WebResult {
     if let Some(name) = name.strip_suffix(".git") {
         return Ok(Redirect::permanent(&format!("/{owner}/{name}")).into_response());
     }
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let Some(branch) = repo.git.default_branch().await? else {
         return page(EmptyPage {
+            viewer: repo.viewer.clone(),
             repo: repo.context(&state, "code"),
         });
     };
@@ -365,9 +388,10 @@ pub async fn home(
 
 pub async fn tree(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name, rest)): Path<(String, String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let (rev, commit, path) = split_rev(&repo.git, &rest).await?;
     tree_page(&state, &repo, &rev, &commit, &path).await
 }
@@ -450,6 +474,7 @@ async fn tree_page(
         .collect();
 
     page(TreePage {
+        viewer: repo.viewer.clone(),
         repo: repo.context(state, "code"),
         picker: repo.picker("tree", rev, path).await?,
         crumbs: repo.crumbs(rev, path),
@@ -469,6 +494,7 @@ async fn tree_page(
 #[derive(Template)]
 #[template(path = "blob.html")]
 struct BlobPage {
+    viewer: Viewer,
     repo: RepoContext,
     picker: RefPicker,
     crumbs: Vec<Crumb>,
@@ -495,10 +521,11 @@ pub struct BlobQuery {
 
 pub async fn blob(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name, rest)): Path<(String, String, String)>,
     Query(query): Query<BlobQuery>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let (rev, commit, path) = split_rev(&repo.git, &rest).await?;
     match repo.git.object_kind(&commit, &path).await? {
         Some(ObjectKind::Blob) => {}
@@ -514,6 +541,7 @@ pub async fn blob(
     let plain = query.plain.is_some_and(|v| v != "0");
 
     let mut view = BlobPage {
+        viewer: repo.viewer.clone(),
         repo: repo.context(&state, "code"),
         picker: repo.picker("blob", &rev, &path).await?,
         crumbs: repo.crumbs(&rev, parent_dir(&path)),
@@ -567,9 +595,10 @@ pub async fn blob(
 
 pub async fn raw(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name, rest)): Path<(String, String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let (_rev, commit, path) = split_rev(&repo.git, &rest).await?;
     if repo.git.object_kind(&commit, &path).await? != Some(ObjectKind::Blob) {
         return Err(WebError::NotFound);
@@ -616,6 +645,7 @@ struct CommitGroup {
 #[derive(Template)]
 #[template(path = "commits.html")]
 struct CommitsPage {
+    viewer: Viewer,
     repo: RepoContext,
     picker: RefPicker,
     path: String,
@@ -632,12 +662,14 @@ pub struct PageQuery {
 
 pub async fn commits_default(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name)): Path<(String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     match repo.git.default_branch().await? {
         Some(branch) => Ok(Redirect::to(&repo.view_url("commits", &branch, "")).into_response()),
         None => page(EmptyPage {
+            viewer: repo.viewer.clone(),
             repo: repo.context(&state, "commits"),
         }),
     }
@@ -645,10 +677,11 @@ pub async fn commits_default(
 
 pub async fn commits(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name, rest)): Path<(String, String, String)>,
     Query(query): Query<PageQuery>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let (rev, commit, path) = split_rev(&repo.git, &rest).await?;
     let page_number = query.page.unwrap_or(1).max(1);
     let mut history = repo
@@ -677,6 +710,7 @@ pub async fn commits(
     }
     let base = repo.view_url("commits", &rev, &path);
     page(CommitsPage {
+        viewer: repo.viewer.clone(),
         repo: repo.context(&state, "commits"),
         picker: repo.picker("commits", &rev, &path).await?,
         path_url: repo.view_url("tree", &rev, &path),
@@ -711,6 +745,7 @@ struct FileView {
 #[derive(Template)]
 #[template(path = "commit.html")]
 struct CommitPage {
+    viewer: Viewer,
     repo: RepoContext,
     commit: CommitView,
     body: String,
@@ -723,9 +758,10 @@ struct CommitPage {
 
 pub async fn commit(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name, id)): Path<(String, String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let commit_id = repo
         .git
         .resolve_commit(&id)
@@ -803,6 +839,7 @@ pub async fn commit(
         .collect::<Vec<_>>();
 
     page(CommitPage {
+        viewer: repo.viewer.clone(),
         repo: repo.context(&state, "commits"),
         commit: repo.commit_view(&commit),
         body: commit.body.clone(),
@@ -839,6 +876,7 @@ struct RefView {
 #[derive(Template)]
 #[template(path = "refs.html")]
 struct RefsPage {
+    viewer: Viewer,
     repo: RepoContext,
     kind: &'static str,
     refs: Vec<RefView>,
@@ -846,9 +884,10 @@ struct RefsPage {
 
 pub async fn branches(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name)): Path<(String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let default = repo.git.default_branch().await?;
     let refs = repo.git.branches().await?;
     refs_page(&state, &repo, "branches", refs, default.as_deref())
@@ -856,9 +895,10 @@ pub async fn branches(
 
 pub async fn tags(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path((owner, name)): Path<(String, String)>,
 ) -> WebResult {
-    let repo = load(&state, &owner, &name).await?;
+    let repo = load(&state, viewer, &owner, &name).await?;
     let refs = repo.git.tags().await?;
     refs_page(&state, &repo, "tags", refs, None)
 }
@@ -883,6 +923,7 @@ fn refs_page(
         })
         .collect();
     page(RefsPage {
+        viewer: repo.viewer.clone(),
         repo: repo.context(state, kind),
         kind,
         refs,

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Settings · omaforge{% endblock %}
+{% block content %}
+<div class="settings">
+  <nav class="side-nav">
+    <a href="/settings/keys"{% if section == "keys" %} class="active"{% endif %}>SSH keys</a>
+    <a href="/settings/tokens"{% if section == "tokens" %} class="active"{% endif %}>Access tokens</a>
+    <a href="/settings/password"{% if section == "password" %} class="active"{% endif %}>Password</a>
+  </nav>
+  <div class="settings-body">
+    {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+    {% if let Some(notice) = notice %}<p class="flash ok">{{ notice }}</p>{% endif %}
+
+    {% if section == "keys" %}
+    <h1 class="page-title">SSH keys</h1>
+    <p class="muted">Keys that can push and pull over SSH as you.</p>
+    <div class="box">
+      {% if credentials.is_empty() %}
+      <div class="empty-state">No SSH keys yet.</div>
+      {% else %}
+      <ul class="credential-list">
+        {% for c in credentials %}
+        <li>
+          <div class="summary">
+            <strong>{{ c.name }}</strong>
+            <div class="mono muted">{{ c.fingerprint }}</div>
+            <div class="meta">Added {{ c.added }} · {{ c.last_used }}</div>
+          </div>
+          <form method="post" action="/settings/keys/{{ c.id }}/delete">
+            <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+            <button class="button danger" type="submit">Delete</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    <h2>Add a key</h2>
+    <form class="box form" method="post" action="/settings/keys">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <label>Name<input name="name" value="{{ name }}" placeholder="Laptop" required></label>
+      <label>Public key<textarea name="key" rows="4" placeholder="ssh-ed25519 AAAA… you@laptop" required>{{ key }}</textarea></label>
+      <p class="muted small">Paste the contents of <code>~/.ssh/id_ed25519.pub</code>.</p>
+      <button class="button primary" type="submit">Add SSH key</button>
+    </form>
+
+    {% else if section == "tokens" %}
+    <h1 class="page-title">Access tokens</h1>
+    <p class="muted">Use a token as the password for git over HTTPS and for the API.</p>
+    {% if let Some(token) = new_token %}
+    <div class="box new-token">
+      <div class="box-body">
+        <p><strong>Copy your new token now.</strong> You won't be able to see it again.</p>
+        <input class="mono" readonly value="{{ token }}" onclick="this.select()">
+      </div>
+    </div>
+    {% endif %}
+    <div class="box">
+      {% if credentials.is_empty() %}
+      <div class="empty-state">No access tokens yet.</div>
+      {% else %}
+      <ul class="credential-list">
+        {% for c in credentials %}
+        <li>
+          <div class="summary">
+            <strong>{{ c.name }}</strong>
+            <div class="meta">Created {{ c.added }} · {{ c.last_used }}</div>
+          </div>
+          <form method="post" action="/settings/tokens/{{ c.id }}/delete">
+            <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+            <button class="button danger" type="submit">Delete</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    <h2>New token</h2>
+    <form class="box form inline-form" method="post" action="/settings/tokens">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <label>Name<input name="name" placeholder="Laptop git" required></label>
+      <button class="button primary" type="submit">Generate token</button>
+    </form>
+
+    {% else %}
+    <h1 class="page-title">Password</h1>
+    <form class="box form" method="post" action="/settings/password">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <label>Current password<input name="current" type="password" autocomplete="current-password" required></label>
+      <label>New password<input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Confirm new password<input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button class="button primary" type="submit">Change password</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -5,15 +5,18 @@ Each milestone should be something you can use day to day before the next one st
 ## M0: Host your code
 - [x] `omaforge init` / `serve`, SQLite migrations
 - [x] Users (CLI), password + personal access token auth
-- [x] SSH keys (CLI)
-- [ ] Web sessions/login
+- [x] SSH keys (CLI and web settings)
+- [x] Web sign-in: sessions, CSRF-protected forms, settings for SSH keys, tokens and password
+- [x] Create repositories from the web
 - [x] Create repos (bare, on disk), with public/private visibility (CLI)
 - [x] Clone/push over smart HTTP (protocol v0 and v2)
 - [x] Clone/push over SSH (built-in server, protocol v0 and v2)
 - [x] Code browser: tree, file view with syntax highlighting, README rendering, commits, a single commit diff, branches/tags
 - [x] Omarchy-themed UI (follows the active Omarchy theme live)
-- [ ] Code browser for private repos (needs web login)
+- [x] Code browser for private repos (owner and admins)
 - [ ] Blame, compare views, syntax-highlighted diffs
+- [ ] `omaforge import local <dirs…>`: bulk-import existing local repositories
+- [ ] Repository settings on the web (description, visibility, rename, delete)
 
 ## M1: Collaborate
 - [ ] Issues: markdown, labels, assignees, comments, references (`#12`, `fixes #12`)

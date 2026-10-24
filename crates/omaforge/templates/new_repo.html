@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}New repository · omaforge{% endblock %}
+{% block content %}
+<div class="narrow wide-narrow">
+  <h1 class="page-title">Create a new repository</h1>
+  <form class="box form" method="post" action="/new">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+    <label>Name
+      <span class="prefixed"><span class="prefix">{{ owner }} /</span><input name="name" value="{{ name }}" autocapitalize="none" autofocus required maxlength="100" pattern="[A-Za-z0-9._\-]+"></span>
+    </label>
+    <label><span>Description <span class="muted">(optional)</span></span><input name="description" value="{{ description }}"></label>
+    <fieldset>
+      <label class="choice"><input type="radio" name="visibility" value="public"{% if !private %} checked{% endif %}> <span><strong>Public</strong><br><span class="muted">Anyone can see and clone it.</span></span></label>
+      <label class="choice"><input type="radio" name="visibility" value="private"{% if private %} checked{% endif %}> <span><strong>Private</strong><br><span class="muted">Only you (and admins) can see it.</span></span></label>
+    </fieldset>
+    <button class="button primary" type="submit">Create repository</button>
+  </form>
+</div>
+{% endblock %}

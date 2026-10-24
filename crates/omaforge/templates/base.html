@@ -5,12 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}omaforge{% endblock %}</title>
   <link rel="stylesheet" href="/assets/theme.css">
-  <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="{{ crate::web::style_url() }}">
 </head>
 <body>
   <header class="site-header">
     <a class="logo" href="/">{{ crate::web::icons::LOGO|safe }}<span>omaforge</span></a>
     <nav><a href="/">Repositories</a></nav>
+    <span class="spacer"></span>
+    {% if let Some(user) = viewer.user %}
+    <a class="button" href="/new" title="New repository">{{ crate::web::icons::PLUS|safe }}New</a>
+    <details class="menu right">
+      <summary class="button">{{ user.username }}</summary>
+      <div class="menu-body">
+        <a href="/{{ user.username }}">Your repositories</a>
+        <a href="/settings/keys">SSH keys</a>
+        <a href="/settings/tokens">Access tokens</a>
+        <a href="/settings/password">Password</a>
+        <form method="post" action="/logout">
+          <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+          <button class="menu-item" type="submit">Sign out</button>
+        </form>
+      </div>
+    </details>
+    {% else %}
+    <a class="button" href="/login">Sign in</a>
+    {% endif %}
   </header>
   <main>
     {% block content %}{% endblock %}
