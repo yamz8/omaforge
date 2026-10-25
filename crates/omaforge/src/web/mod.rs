@@ -7,6 +7,7 @@ mod issues;
 mod pulls;
 pub mod render;
 mod repo;
+mod repo_settings;
 mod session;
 mod settings;
 mod theme;
@@ -140,6 +141,26 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{owner}/{repo}/pull/{number}/delete-branch",
             post(pulls::delete_branch),
+        )
+        .route(
+            "/{owner}/{repo}/settings",
+            get(repo_settings::show).post(repo_settings::general),
+        )
+        .route(
+            "/{owner}/{repo}/settings/collaborators",
+            post(repo_settings::add_collaborator),
+        )
+        .route(
+            "/{owner}/{repo}/settings/collaborators/{user_id}/delete",
+            post(repo_settings::remove_collaborator),
+        )
+        .route(
+            "/{owner}/{repo}/settings/rename",
+            post(repo_settings::rename),
+        )
+        .route(
+            "/{owner}/{repo}/settings/delete",
+            post(repo_settings::delete),
         )
         .route("/{owner}/{repo}/branches", get(repo::branches))
         .route("/{owner}/{repo}/tags", get(repo::tags))

@@ -109,12 +109,42 @@ fn parse_basic(value: &[u8]) -> Option<(String, String)> {
     Some((username.to_owned(), secret.to_owned()))
 }
 
-pub fn can_read(user: Option<&User>, repo: &Repo) -> bool {
-    !repo.is_private || can_write(user, repo)
+/// What someone may do with a repository, from least to most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    None,
+    /// Browse and clone.
+    Read,
+    /// Also push, merge pull requests, and triage issues.
+    Write,
+    /// Also change settings and collaborators: the owner and site admins.
+    Admin,
 }
 
-pub fn can_write(user: Option<&User>, repo: &Repo) -> bool {
-    user.is_some_and(|user| user.is_admin || user.id == repo.owner_id)
+/// `user`'s access to `repo`: owners and site admins administer it, collaborators get
+/// their role, and everyone can read a public repository.
+pub async fn access(db: &SqlitePool, user: Option<&User>, repo: &Repo) -> Result<Access> {
+    let public = if repo.is_private {
+        Access::None
+    } else {
+        Access::Read
+    };
+    let Some(user) = user else {
+        return Ok(public);
+    };
+    if user.is_admin || user.id == repo.owner_id {
+        return Ok(Access::Admin);
+    }
+    Ok(
+        match db::collaborator_role(db, repo.id, user.id)
+            .await?
+            .as_deref()
+        {
+            Some("write") => Access::Write,
+            Some("read") => Access::Read,
+            _ => public,
+        },
+    )
 }
 
 #[cfg(test)]

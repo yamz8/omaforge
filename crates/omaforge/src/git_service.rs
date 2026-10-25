@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::{
-    auth,
+    auth::{self, Access},
     db::{self, User},
     AppState,
 };
@@ -73,10 +73,11 @@ pub async fn authorize(
         });
     };
 
-    let readable = auth::can_read(user, &repo);
+    let access = auth::access(&state.db, user, &repo).await?;
+    let readable = access >= Access::Read;
     let allowed = match service {
         Service::UploadPack => readable,
-        Service::ReceivePack => auth::can_write(user, &repo),
+        Service::ReceivePack => access >= Access::Write,
     };
     Ok(match (allowed, user) {
         (true, _) => Decision::Allowed(forge_git::repo_path(

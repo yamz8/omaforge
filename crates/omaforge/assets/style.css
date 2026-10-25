@@ -460,6 +460,21 @@ textarea.prose { font: 14px/1.5 var(--sans); }
 .timeline-event.assigned .event-icon, .timeline-event.unassigned .event-icon { color: var(--dim); }
 .timeline-event.closed_by .event-icon { background: color-mix(in srgb, var(--magenta) 25%, transparent); color: var(--magenta); }
 
+/* ---- Repository settings ---- */
+
+.repo-settings { max-width: 760px; }
+.repo-settings h2 { font-size: 18px; margin: 28px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.repo-settings h2:first-of-type { margin-top: 0; }
+.repo-settings > p.muted { margin: -4px 0 12px; font-size: 14px; }
+.repo-settings .box + .box { margin-top: 12px; }
+.collaborator-form { grid-template-columns: 1fr auto auto; margin-top: 12px; }
+.collaborator-form select, .role-form select { width: 100%; }
+.role-form { display: flex; gap: 8px; align-items: center; }
+.danger-title { color: var(--red); }
+.danger-zone { border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+.danger-zone p { margin: 0; }
+.repo-settings > p.after-box { margin: 8px 0 0; }
+
 /* ---- Refs ---- */
 
 .ref-list li { display: flex; align-items: center; gap: 16px; }
@@ -481,6 +496,7 @@ textarea.prose { font: 14px/1.5 var(--sans); }
   .inline-form { grid-template-columns: 1fr; }
   .issue-layout { grid-template-columns: 1fr; }
   .label-form { grid-template-columns: 1fr; }
+  .collaborator-form { grid-template-columns: 1fr; }
   .site-header nav { display: none; }
   .files .size, .commit-list .sha-cell { display: none; }
   .site-header { gap: 16px; }

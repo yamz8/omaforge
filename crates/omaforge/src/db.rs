@@ -245,7 +245,9 @@ pub async fn visible_repos(
         "SELECT ",
         repo_columns!(),
         " FROM repos r JOIN users u ON u.id = r.owner_id
-         WHERE (r.is_private = 0 OR ?2 OR r.owner_id = ?3) AND (?1 IS NULL OR u.username = ?1)
+         WHERE (r.is_private = 0 OR ?2 OR r.owner_id = ?3
+                OR EXISTS (SELECT 1 FROM collaborators c WHERE c.repo_id = r.id AND c.user_id = ?3))
+           AND (?1 IS NULL OR u.username = ?1)
          ORDER BY u.username, r.name"
     ))
     .bind(owner)
@@ -396,5 +398,120 @@ pub async fn delete_token(db: &SqlitePool, user_id: i64, id: i64) -> Result<()> 
         .bind(user_id)
         .execute(db)
         .await?;
+    Ok(())
+}
+
+// ---- Collaborators ----
+
+pub async fn collaborator_role(
+    db: &SqlitePool,
+    repo_id: i64,
+    user_id: i64,
+) -> Result<Option<String>> {
+    let role =
+        sqlx::query_scalar("SELECT role FROM collaborators WHERE repo_id = ? AND user_id = ?")
+            .bind(repo_id)
+            .bind(user_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(role)
+}
+
+/// `(user_id, username, role)`, alphabetically.
+pub async fn collaborators(db: &SqlitePool, repo_id: i64) -> Result<Vec<(i64, String, String)>> {
+    let rows = sqlx::query_as(
+        "SELECT u.id, u.username, c.role FROM collaborators c JOIN users u ON u.id = c.user_id
+         WHERE c.repo_id = ? ORDER BY u.username",
+    )
+    .bind(repo_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// Add a collaborator, or change their role.
+pub async fn set_collaborator(
+    db: &SqlitePool,
+    repo_id: i64,
+    user_id: i64,
+    role: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, ?)
+         ON CONFLICT (repo_id, user_id) DO UPDATE SET role = excluded.role",
+    )
+    .bind(repo_id)
+    .bind(user_id)
+    .bind(role)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_collaborator(db: &SqlitePool, repo_id: i64, user_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM collaborators WHERE repo_id = ? AND user_id = ?")
+        .bind(repo_id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_repo_visibility(db: &SqlitePool, repo_id: i64, is_private: bool) -> Result<()> {
+    sqlx::query("UPDATE repos SET is_private = ? WHERE id = ?")
+        .bind(is_private)
+        .bind(repo_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Rename a repository in the database and on disk. The directory moves first; if the
+/// database update then fails, it is moved back.
+pub async fn rename_repo(
+    db: &SqlitePool,
+    repos_root: &Path,
+    repo: &Repo,
+    new_name: &str,
+) -> Result<()> {
+    let from = forge_git::repo_path(repos_root, &repo.owner_name, &repo.name);
+    let to = forge_git::repo_path(repos_root, &repo.owner_name, new_name);
+    if !forge_git::is_valid_name(new_name) {
+        anyhow::bail!("invalid repository name");
+    }
+    // Names are case-insensitive, so `Hello` -> `hello` is allowed onto itself.
+    let same = repo.name.eq_ignore_ascii_case(new_name);
+    if !same
+        && (to.exists()
+            || repo_by_path(db, &repo.owner_name, new_name)
+                .await?
+                .is_some())
+    {
+        anyhow::bail!("{}/{new_name} already exists", repo.owner_name);
+    }
+    std::fs::rename(&from, &to)?;
+    let updated = sqlx::query("UPDATE repos SET name = ? WHERE id = ?")
+        .bind(new_name)
+        .bind(repo.id)
+        .execute(db)
+        .await;
+    if let Err(error) = updated {
+        std::fs::rename(&to, &from).ok();
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// Delete a repository and everything in it: the row (issues, pull requests and the rest
+/// cascade) and the bare repository on disk.
+pub async fn destroy_repo(db: &SqlitePool, repos_root: &Path, repo: &Repo) -> Result<()> {
+    sqlx::query("DELETE FROM repos WHERE id = ?")
+        .bind(repo.id)
+        .execute(db)
+        .await?;
+    let path = forge_git::repo_path(repos_root, &repo.owner_name, &repo.name);
+    if path.exists() {
+        std::fs::remove_dir_all(&path)?;
+    }
     Ok(())
 }

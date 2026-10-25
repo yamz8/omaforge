@@ -37,6 +37,8 @@ pub(super) struct RepoContext {
     pub(super) tab: &'static str,
     pub(super) open_pulls: i64,
     pub(super) open_issues: i64,
+    /// Show the Settings tab.
+    pub(super) is_admin: bool,
 }
 
 pub(super) struct RefLink {
@@ -75,9 +77,18 @@ pub(super) struct Loaded {
     pub(super) url: String,
     pub(super) open_pulls: i64,
     pub(super) open_issues: i64,
+    pub(super) access: auth::Access,
 }
 
 impl Loaded {
+    pub(super) fn can_write(&self) -> bool {
+        self.access >= auth::Access::Write
+    }
+
+    pub(super) fn is_admin(&self) -> bool {
+        self.access >= auth::Access::Admin
+    }
+
     pub(super) fn context(&self, state: &AppState, tab: &'static str) -> RepoContext {
         RepoContext {
             owner: self.repo.owner_name.clone(),
@@ -94,6 +105,7 @@ impl Loaded {
             tab,
             open_pulls: self.open_pulls,
             open_issues: self.open_issues,
+            is_admin: self.is_admin(),
         }
     }
 
@@ -186,8 +198,11 @@ pub(super) async fn load(
     }
     let repo = db::repo_by_path(&state.db, owner, name)
         .await?
-        .filter(|repo| auth::can_read(viewer.user.as_ref(), repo))
         .ok_or(WebError::NotFound)?;
+    let access = auth::access(&state.db, viewer.user.as_ref(), &repo).await?;
+    if access < auth::Access::Read {
+        return Err(WebError::NotFound);
+    }
     let git = Repository::open(forge_git::repo_path(
         &state.repos,
         &repo.owner_name,
@@ -203,6 +218,7 @@ pub(super) async fn load(
         url,
         open_pulls,
         open_issues,
+        access,
     })
 }
 

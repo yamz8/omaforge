@@ -18,7 +18,7 @@ use super::{
     repo::{load, CommitView, Loaded, RepoContext},
     Viewer, WebError, WebResult,
 };
-use crate::{auth, db, AppState};
+use crate::{db, AppState};
 
 /// Commits shown when comparing branches or on a pull request.
 const COMMIT_LIMIT: usize = 250;
@@ -149,7 +149,7 @@ fn identity(state: &AppState, username: &str, email: Option<String>) -> Identity
 /// Whether the viewer may close, reopen or merge: the author can close their own pull
 /// request; merging needs write access.
 fn can_write(repo: &Loaded) -> bool {
-    auth::can_write(repo.viewer.user.as_ref(), &repo.repo)
+    repo.can_write()
 }
 
 fn is_author(repo: &Loaded, pull: &db::Pull) -> bool {

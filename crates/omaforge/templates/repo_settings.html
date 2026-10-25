@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="repo-settings">
+  {% if let Some(notice) = notice %}<p class="flash ok">{{ notice }}</p>{% endif %}
+  {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+
+  <h2>General</h2>
+  <form class="box form" method="post" action="{{ repo.url }}/settings">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <label>Description<input name="description" value="{{ repo.description }}" maxlength="350"></label>
+    <fieldset>
+      <label class="choice"><input type="radio" name="visibility" value="public"{% if !repo.is_private %} checked{% endif %}> <span><strong>Public</strong><br><span class="muted">Anyone can see and clone it.</span></span></label>
+      <label class="choice"><input type="radio" name="visibility" value="private"{% if repo.is_private %} checked{% endif %}> <span><strong>Private</strong><br><span class="muted">Only you, collaborators and site admins can see it.</span></span></label>
+    </fieldset>
+    <button class="button primary" type="submit">Save</button>
+  </form>
+
+  <h2 id="collaborators">Collaborators</h2>
+  <p class="muted">Read access lets someone see and clone a private repository. Write access also lets them push, merge pull requests and triage issues.</p>
+  <div class="box">
+    {% if collaborators.is_empty() %}
+    <div class="empty-state">Only you have access{% if !repo.is_private %} beyond reading{% endif %}.</div>
+    {% else %}
+    <ul class="credential-list">
+      {% for c in collaborators %}
+      <li>
+        <div class="summary"><a href="/{{ c.username }}"><strong>{{ c.username }}</strong></a></div>
+        <form class="role-form" method="post" action="{{ repo.url }}/settings/collaborators">
+          <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+          <input type="hidden" name="username" value="{{ c.username }}">
+          <select name="role" aria-label="Role for {{ c.username }}">
+            <option value="read"{% if c.role == "read" %} selected{% endif %}>Read</option>
+            <option value="write"{% if c.role == "write" %} selected{% endif %}>Write</option>
+          </select>
+          <button class="button" type="submit">Change</button>
+        </form>
+        <form method="post" action="{{ repo.url }}/settings/collaborators/{{ c.user_id }}/delete">
+          <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+          <button class="button danger" type="submit">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% if !candidates.is_empty() %}
+  <form class="box form inline-form collaborator-form" method="post" action="{{ repo.url }}/settings/collaborators">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <label>Add someone
+      <select name="username">{% for name in candidates %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select>
+    </label>
+    <label>Access
+      <select name="role"><option value="write">Write</option><option value="read">Read</option></select>
+    </label>
+    <button class="button primary" type="submit">Add collaborator</button>
+  </form>
+  {% endif %}
+
+  <h2>Rename</h2>
+  <form class="box form inline-form" method="post" action="{{ repo.url }}/settings/rename">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <label>New name
+      <span class="prefixed"><span class="prefix">{{ repo.owner }} /</span><input name="name" value="{{ repo.name }}" required maxlength="100" pattern="[A-Za-z0-9._\-]+"></span>
+    </label>
+    <button class="button" type="submit">Rename</button>
+  </form>
+  <p class="muted small after-box">Old URLs and clone URLs stop working; update your remotes with <code>git remote set-url</code>.</p>
+
+  <h2 class="danger-title">Delete this repository</h2>
+  <form class="box form danger-zone" method="post" action="{{ repo.url }}/settings/delete">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <p>This permanently deletes <strong>{{ full_name }}</strong>: its code, issues, pull requests and comments. It can't be undone.</p>
+    <label><span>Type <code>{{ full_name }}</code> to confirm</span><input name="confirm" autocomplete="off" required></label>
+    <button class="button danger" type="submit">Delete this repository</button>
+  </form>
+</div>
+{% endblock %}

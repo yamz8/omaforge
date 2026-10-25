@@ -11,4 +11,5 @@
   <a href="{{ repo.url }}/commits"{% if repo.tab == "commits" %} class="active"{% endif %}>{{ crate::web::icons::HISTORY|safe }}Commits</a>
   <a href="{{ repo.url }}/branches"{% if repo.tab == "branches" %} class="active"{% endif %}>{{ crate::web::icons::BRANCH|safe }}Branches</a>
   <a href="{{ repo.url }}/tags"{% if repo.tab == "tags" %} class="active"{% endif %}>{{ crate::web::icons::TAG|safe }}Tags</a>
+  {% if repo.is_admin %}<a href="{{ repo.url }}/settings"{% if repo.tab == "settings" %} class="active"{% endif %}>{{ crate::web::icons::GEAR|safe }}Settings</a>{% endif %}
 </nav>

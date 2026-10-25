@@ -16,14 +16,14 @@ Each milestone should be something you can use day to day before the next one st
 - [x] Code browser for private repos (owner and admins)
 - [ ] Blame, compare views, syntax-highlighted diffs
 - [x] `omaforge import local <dirs…>`: bulk-import existing local repositories (`--update` to re-sync)
-- [ ] Repository settings on the web (description, visibility, rename, delete)
+- [x] Repository settings on the web (description, visibility, collaborators, rename, delete)
 
 ## M1: Collaborate
 - [x] Issues: markdown, labels, assignees, comments, references (`#12`, `@name`, `fixes #12` closes on merge)
 - [x] Pull requests: compare, create, diff view, inline review comments, approve/request changes
 - [x] Merge: merge commit, squash, rebase (in the bare repo, compare-and-swap on the branch); delete merged branch
 - [ ] Branch protection basics (required review, no direct pushes)
-- [ ] Collaborators, so people other than the owner can push and merge
+- [x] Collaborators with read or write access (web settings and `admin add-collaborator`)
 - [ ] Notifications, plus webhooks with GitHub-shaped payloads
 
 ## M2: Leave GitHub (or don't)

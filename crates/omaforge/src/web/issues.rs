@@ -14,10 +14,10 @@ use super::{
     repo::{load, Loaded, RepoContext},
     Viewer, WebError, WebResult,
 };
-use crate::{auth, db, AppState};
+use crate::{db, AppState};
 
 fn can_write(repo: &Loaded) -> bool {
-    auth::can_write(repo.viewer.user.as_ref(), &repo.repo)
+    repo.can_write()
 }
 
 /// A label as shown on a chip: its colors are computed so the text stays readable.

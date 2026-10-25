@@ -104,6 +104,14 @@ enum AdminCommand {
     },
     /// Set a repository's description, given as owner/name.
     SetDescription { repo: String, description: String },
+    /// Give a user read or write access to a repository, given as owner/name.
+    AddCollaborator {
+        repo: String,
+        username: String,
+        /// `read` or `write`.
+        #[arg(long, default_value = "write")]
+        role: String,
+    },
     /// Add an SSH public key for a user, read from --key-file or stdin.
     AddSshKey {
         username: String,
@@ -293,6 +301,28 @@ async fn admin(state: &AppState, command: AdminCommand) -> Result<()> {
             }
             db::set_repo_description(&state.db, owner.id, name, description.trim()).await?;
             println!("updated {}/{name}", owner.username);
+        }
+        AdminCommand::AddCollaborator {
+            repo,
+            username,
+            role,
+        } => {
+            if !matches!(role.as_str(), "read" | "write") {
+                bail!("--role must be read or write");
+            }
+            let (owner, name) = split_repo(&repo)?;
+            let repo = db::repo_by_path(&state.db, owner, name)
+                .await?
+                .with_context(|| format!("no such repository {repo:?}"))?;
+            let user = find_user(state, &username).await?;
+            if user.id == repo.owner_id {
+                bail!("{username} owns {}/{}", repo.owner_name, repo.name);
+            }
+            db::set_collaborator(&state.db, repo.id, user.id, &role).await?;
+            println!(
+                "{} now has {role} access to {}/{}",
+                user.username, repo.owner_name, repo.name
+            );
         }
         AdminCommand::AddSshKey {
             username,

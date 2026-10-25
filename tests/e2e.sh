@@ -387,6 +387,63 @@ post $A $TR/labels/$URGENT/delete csrf=$(csrf $A $TR/labels) >/dev/null
 check "alice deletes label"         bash -c "! curl -s $URL$TR/labels | grep -q 'urgent'"
 check "private repo issues hidden"  test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/secret/issues)" = 404
 
+echo "== Collaborators and repository settings"
+echo carolpassword | $BIN admin create-user carol --password-stdin >/dev/null
+$BIN admin add-ssh-key carol laptop --key-file "$W/carol.pub" >/dev/null
+C=$W/carol.jar; curl -s -c $C --data 'login=carol&password=carolpassword' -o /dev/null $URL/login
+CAROL_HTTP=http://carol:carolpassword@127.0.0.1:$PORT
+code() { curl -s -o /dev/null -w '%{http_code}' -b "$1" "$URL$2"; }
+check "settings: anonymous to login" bash -c "curl -s -o /dev/null -w '%{redirect_url}' $URL/alice/secret/settings | grep -q '/login?next=/alice/secret/settings'"
+check "settings: bob gets 404"      test "$(code $B /alice/prs/settings)" = 404
+check "settings: owner sees page"   bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/prs/settings) = 200 ] && curl -s -b $A $URL/alice/prs | grep -q '/alice/prs/settings'"
+check "no Settings tab for bob"     bash -c "! curl -s -b $B $URL/alice/prs | grep -q '/alice/prs/settings'"
+check "carol can't see secret"      bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $C $URL/alice/secret) = 404 ]"
+refuse "carol can't clone secret"   git clone -q $CAROL_HTTP/alice/secret.git carol-1
+R=$(post $A /alice/secret/settings/collaborators csrf=$(csrf $A /alice/secret/settings) username=carol role=read)
+check "add carol with read"         test "$R" = "303 $URL/alice/secret/settings#collaborators"
+check "read: carol browses"         bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $C $URL/alice/secret) = 200 ] && curl -s -b $C $URL/ | grep -q 'alice/secret'"
+check "read: clone over HTTP"       git clone -q $CAROL_HTTP/alice/secret.git carol-read
+check "read: clone over SSH"        env GIT_SSH_COMMAND="$(ssh_as carol)" git clone -q $SSH_URL/alice/secret.git carol-read-ssh
+(cd carol-read && echo carol >carol.txt && git add carol.txt && git commit -qm "Carol was here")
+refuse "read: push refused (HTTP)"  git -C carol-read push -q $CAROL_HTTP/alice/secret.git HEAD:carol
+refuse "read: push refused (SSH)"   env GIT_SSH_COMMAND="$(ssh_as carol)" git -C carol-read push -q $SSH_URL/alice/secret.git HEAD:carol
+check "read: no Settings for carol" bash -c "! curl -s -b $C $URL/alice/secret | grep -q '/alice/secret/settings'"
+post $A /alice/secret/settings/collaborators csrf=$(csrf $A /alice/secret/settings) username=carol role=write >/dev/null
+check "write: push over HTTP"       git -C carol-read push -q $CAROL_HTTP/alice/secret.git HEAD:carol
+check "write: push over SSH"        env GIT_SSH_COMMAND="$(ssh_as carol)" git -C carol-read push -q $SSH_URL/alice/secret.git HEAD:carol-ssh
+check "write: still no Settings"    test "$(code $C /alice/secret/settings)" = 404
+post $A /alice/prs/settings/collaborators csrf=$(csrf $A /alice/prs/settings) username=carol role=write >/dev/null
+(cd prs-src && git checkout -qb carol-change main && git pull -q $PRS main && echo c >c.txt && git add c.txt && git commit -qm "Carol's change" && git push -q $PRS carol-change && git checkout -q main)
+NUM=$(post $B /alice/prs/pulls csrf=$(csrf $B "/alice/prs/compare?base=main&head=carol-change") base=main head=carol-change "title=Carol change" | grep -o '[0-9]*$')
+check "write: merge button shown"   bash -c "curl -s -b $C $URL/alice/prs/pull/$NUM | grep -q 'Merge pull request'"
+check "write: carol merges"         test "$(post $C /alice/prs/pull/$NUM/merge csrf=$(csrf $C /alice/prs/pull/$NUM) method=merge)" = "303 $URL/alice/prs/pull/$NUM"
+# Write access to alice/prs doesn't extend to alice/tracker.
+post $C /alice/tracker/issues/2/labels csrf=$(csrf $C /alice/tracker/issues/2) id=$LABEL_BUG >/dev/null
+check "no triage without access"    test "$(db "select count(*) from issue_labels il join issues i on i.id = il.issue_id join repos r on r.id = i.repo_id where r.name = 'tracker' and i.number = 2")" = 0
+CAROL_ID=$(db "select id from users where username = 'carol'")
+post $A /alice/secret/settings/collaborators/$CAROL_ID/delete csrf=$(csrf $A /alice/secret/settings) >/dev/null
+check "removed: access gone"        bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $C $URL/alice/secret) = 404 ]"
+refuse "removed: clone refused"     git clone -q $CAROL_HTTP/alice/secret.git carol-2
+check "unknown user refused"        bash -c "post $A /alice/secret/settings/collaborators csrf=\$(csrf $A /alice/secret/settings) username=nobody role=write >/dev/null; grep -q 'no user named' $W/post.html"
+check "owner can't be added"        bash -c "post $A /alice/secret/settings/collaborators csrf=\$(csrf $A /alice/secret/settings) username=alice role=read >/dev/null; grep -q 'already has full access' $W/post.html"
+check "bob can't add himself"       test "$(post $B /alice/secret/settings/collaborators csrf=$(csrf $B /settings/keys) username=bob role=write | cut -d' ' -f1)" = 404
+check "CLI adds collaborator"       bash -c "$BIN admin add-collaborator alice/secret carol --role read | grep -q 'carol now has read access' && [ \$(curl -s -o /dev/null -w '%{http_code}' -b $C $URL/alice/secret) = 200 ]"
+post $A /alice/later/settings csrf=$(csrf $A /alice/later/settings) "description=Now private" visibility=private >/dev/null
+check "make private"                bash -c "grep -q 'Settings saved' $W/post.html && [ \$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/later) = 404 ]"
+post $A /alice/later/settings csrf=$(csrf $A /alice/later/settings) "description=Public again" visibility=public >/dev/null
+check "make public, description"    bash -c "curl -s $URL/alice/later | grep -q 'Public again'"
+post $A /alice/made-on-web/issues csrf=$(csrf $A /alice/made-on-web/issues/new) "title=Survives a rename" >/dev/null
+R=$(post $A /alice/made-on-web/settings/rename csrf=$(csrf $A /alice/made-on-web/settings) name=renamed)
+check "rename"                      test "$R" = "303 $URL/alice/renamed/settings"
+check "old name gone, new works"    bash -c "[ \$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/made-on-web) = 404 ] && curl -s -b $A $URL/alice/renamed/issues/1 | grep -q 'Survives a rename'"
+check "clone renamed repo"          git clone -q http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/renamed.git renamed-clone
+check "rename onto existing refused" bash -c "post $A /alice/renamed/settings/rename csrf=\$(csrf $A /alice/renamed/settings) name=hello >/dev/null; grep -q 'already exists' $W/post.html"
+post $A /alice/renamed/settings/delete csrf=$(csrf $A /alice/renamed/settings) confirm=renamed >/dev/null
+check "delete needs full name"      bash -c "grep -q 'Nothing was deleted' $W/post.html && [ -d $OMAFORGE_DATA/repos/alice/renamed.git ]"
+check "delete needs CSRF"           test "$(post $A /alice/renamed/settings/delete csrf=nope confirm=alice/renamed | cut -d' ' -f1)" = 403
+R=$(post $A /alice/renamed/settings/delete csrf=$(csrf $A /alice/renamed/settings) confirm=alice/renamed)
+check "delete"                      bash -c "[ '$R' = '303 $URL/alice' ] && [ ! -e $OMAFORGE_DATA/repos/alice/renamed.git ] && [ \"\$(db \"select count(*) from repos where name = 'renamed'\")\" = 0 ] && [ \"\$(db \"select count(*) from issues where repo_id not in (select id from repos)\")\" = 0 ]"
+
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
     echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10
