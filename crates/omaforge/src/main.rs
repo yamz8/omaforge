@@ -2,9 +2,11 @@ mod actions;
 mod api;
 mod auth;
 mod db;
+mod events;
 mod git_http;
 mod git_service;
 mod git_ssh;
+mod hooks;
 mod import;
 mod web;
 
@@ -57,6 +59,9 @@ enum Command {
     /// Bring existing repositories into omaforge.
     #[command(subcommand)]
     Import(ImportCommand),
+    /// Run a git hook (omaforge installs these; git calls them during pushes).
+    #[command(hide = true)]
+    Hook { name: String },
 }
 
 #[derive(Subcommand)]
@@ -127,6 +132,8 @@ enum AdminCommand {
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
+    /// The data directory (database, repositories, hooks).
+    pub data: PathBuf,
     /// Root directory of bare repositories.
     pub repos: PathBuf,
     pub site: Arc<web::Site>,
@@ -192,6 +199,19 @@ async fn main() -> Result<()> {
             serve(&cli.data, state, listen, ssh_listen).await
         }
         Command::Admin(command) => admin(&state, command).await,
+        Command::Hook { name } => {
+            let state = AppState {
+                site: Arc::new(web::Site {
+                    http_url: std::env::var("OMAFORGE_PUBLIC_URL")
+                        .unwrap_or_else(|_| "http://localhost".into()),
+                    ssh: None,
+                    theme: web::Theme::Builtin,
+                }),
+                ..state
+            };
+            let code = hooks::run(&state, &name).await?;
+            std::process::exit(code);
+        }
         Command::Import(ImportCommand::Local {
             paths,
             owner,
@@ -222,6 +242,7 @@ async fn open(data: &Path) -> Result<AppState> {
     };
     Ok(AppState {
         db,
+        data: data.to_owned(),
         repos,
         site: Arc::new(site),
     })
@@ -233,6 +254,8 @@ async fn serve(
     listen: SocketAddr,
     ssh_listen: SocketAddr,
 ) -> Result<()> {
+    hooks::install(data)?;
+    events::spawn_worker(state.clone());
     let host_key = git_ssh::load_or_create_host_key(data)?;
     let ssh = git_ssh::serve(state.clone(), ssh_listen, host_key);
 

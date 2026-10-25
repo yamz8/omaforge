@@ -1,7 +1,7 @@
 //! Git smart HTTP transport (protocol v0/v1/v2), backed by `git upload-pack` and
 //! `git receive-pack` in `--stateless-rpc` mode.
 
-use std::{path::PathBuf, process::Stdio};
+use std::process::Stdio;
 
 use axum::{
     body::Body,
@@ -13,10 +13,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tower_http::decompression::RequestDecompressionLayer;
 
@@ -53,19 +50,19 @@ async fn info_refs(
         )
             .into_response();
     };
-    let path = match authorize(&state, &owner, &repo, &headers, service).await {
-        Ok(path) => path,
+    let grant = match authorize(&state, &owner, &repo, &headers, service).await {
+        Ok(grant) => grant,
         Err(response) => return response,
     };
 
     let protocol = git_protocol(&headers);
-    let mut command = Command::new("git");
-    command
-        .args([service.subcommand(), "--stateless-rpc", "--advertise-refs"])
-        .arg(&path);
-    if let Some(protocol) = &protocol {
-        command.env("GIT_PROTOCOL", protocol);
-    }
+    let mut command = git_service::command(
+        &state,
+        service,
+        &grant,
+        &["--stateless-rpc", "--advertise-refs"],
+        protocol.as_deref(),
+    );
     let output = match command.output().await {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
@@ -115,21 +112,23 @@ async fn rpc(
     body: Body,
     service: Service,
 ) -> Response {
-    let path = match authorize(&state, &owner, &repo, &headers, service).await {
-        Ok(path) => path,
+    let grant = match authorize(&state, &owner, &repo, &headers, service).await {
+        Ok(grant) => grant,
         Err(response) => return response,
     };
 
-    let mut command = Command::new("git");
+    let protocol = git_protocol(&headers);
+    let mut command = git_service::command(
+        &state,
+        service,
+        &grant,
+        &["--stateless-rpc"],
+        protocol.as_deref(),
+    );
     command
-        .args([service.subcommand(), "--stateless-rpc"])
-        .arg(&path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(protocol) = git_protocol(&headers) {
-        command.env("GIT_PROTOCOL", protocol);
-    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return internal_error(error.into()),
@@ -177,7 +176,7 @@ async fn authorize(
     repo: &str,
     headers: &HeaderMap,
     service: Service,
-) -> Result<PathBuf, Response> {
+) -> Result<git_service::Grant, Response> {
     let user = match auth::authenticate(&state.db, headers).await {
         Ok(Identity::User(user)) => Some(user),
         Ok(Identity::Anonymous) => None,
@@ -185,7 +184,7 @@ async fn authorize(
         Err(error) => return Err(internal_error(error)),
     };
     match git_service::authorize(state, user.as_ref(), owner, repo, service).await {
-        Ok(Decision::Allowed(path)) => Ok(path),
+        Ok(Decision::Allowed(grant)) => Ok(grant),
         Ok(Decision::NeedsLogin) => Err(unauthorized()),
         Ok(Decision::ReadOnly) => Err((
             StatusCode::FORBIDDEN,

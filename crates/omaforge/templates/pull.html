@@ -32,6 +32,8 @@
     <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::ALERT|safe }}</span><div><strong>A branch is missing.</strong> {{ pull.head_branch }} or {{ pull.base_branch }} no longer exists, so this can't be merged.</div></div>
     {% else if merge.status == "uptodate" %}
     <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::CHECK|safe }}</span><div><strong>Nothing to merge.</strong> Everything in {{ pull.head_branch }} is already in {{ pull.base_branch }}.</div></div>
+    {% else if merge.status == "blocked" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::LOCK|safe }}</span><div><strong>Merging is blocked.</strong> {% if let Some(reason) = merge.blocked_by %}{{ reason }}{% endif %}</div></div>
     {% else if merge.status == "conflicts" %}
     <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::ALERT|safe }}</span><div><strong>This branch has conflicts</strong> that must be resolved before merging:
       <ul class="conflict-list">{% for f in merge.conflicts %}<li class="mono">{{ f }}</li>{% endfor %}</ul>

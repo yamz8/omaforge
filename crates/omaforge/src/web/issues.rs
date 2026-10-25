@@ -14,7 +14,7 @@ use super::{
     repo::{load, Loaded, RepoContext},
     Viewer, WebError, WebResult,
 };
-use crate::{db, AppState};
+use crate::{db, events, AppState};
 
 fn can_write(repo: &Loaded) -> bool {
     repo.can_write()
@@ -231,6 +231,7 @@ pub async fn create(
     let number =
         db::create_issue(&state.db, repo.repo.id, user.id, title, form.body.trim()).await?;
     tracing::info!(repo = %repo.url, number, user = %user.username, "opened issue");
+    events::issue(&state, &repo.repo, number, "opened", &user).await;
     Ok(Redirect::to(&format!("{}/issues/{number}", repo.url)).into_response())
 }
 
@@ -388,6 +389,7 @@ pub async fn comment(
     let body = form.body.trim();
     if !body.is_empty() {
         db::add_comment(&state.db, issue.issue_id, user.id, body, None).await?;
+        events::comment(&state, &repo.repo, number, body, &user).await;
     }
     if let Some(action) = form.action.as_deref() {
         let allowed = can_write(&repo) || user.id == issue.author_id;
@@ -396,10 +398,12 @@ pub async fn comment(
         }
         match action {
             "close" if issue.is_open() => {
-                db::set_issue_state(&state.db, issue.issue_id, user.id, false).await?
+                db::set_issue_state(&state.db, issue.issue_id, user.id, false).await?;
+                events::issue(&state, &repo.repo, number, "closed", &user).await;
             }
             "reopen" if !issue.is_open() => {
-                db::set_issue_state(&state.db, issue.issue_id, user.id, true).await?
+                db::set_issue_state(&state.db, issue.issue_id, user.id, true).await?;
+                events::issue(&state, &repo.repo, number, "reopened", &user).await;
             }
             _ => {}
         }
@@ -423,6 +427,7 @@ pub async fn set_labels(
 ) -> WebResult {
     let (repo, issue, user) = triage(&state, viewer, &owner, &name, number, &form.csrf).await?;
     db::set_issue_labels(&state.db, repo.repo.id, issue.issue_id, user.id, &form.id).await?;
+    events::issue(&state, &repo.repo, number, "labeled", &user).await;
     Ok(Redirect::to(&format!("{}/issues/{number}", repo.url)).into_response())
 }
 
@@ -434,6 +439,7 @@ pub async fn set_assignees(
 ) -> WebResult {
     let (repo, issue, user) = triage(&state, viewer, &owner, &name, number, &form.csrf).await?;
     db::set_assignees(&state.db, issue.issue_id, user.id, &form.id).await?;
+    events::issue(&state, &repo.repo, number, "assigned", &user).await;
     Ok(Redirect::to(&format!("{}/issues/{number}", repo.url)).into_response())
 }
 

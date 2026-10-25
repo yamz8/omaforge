@@ -22,6 +22,41 @@ struct CollaboratorView {
     role: String,
 }
 
+struct RuleView {
+    id: i64,
+    pattern: String,
+    summary: String,
+}
+
+struct DeliveryView {
+    id: i64,
+    event: String,
+    /// `succeeded`, `failed` or `pending`.
+    status: String,
+    detail: String,
+    time_ago: String,
+    payload: String,
+    response: String,
+}
+
+struct WebhookView {
+    id: i64,
+    url: String,
+    events: String,
+    deliveries: Vec<DeliveryView>,
+}
+
+/// Events a webhook can subscribe to, with labels for the form.
+const WEBHOOK_EVENTS: &[(&str, &str)] = &[
+    ("push", "Pushes"),
+    ("pull_request", "Pull requests"),
+    ("pull_request_review", "Reviews"),
+    ("issues", "Issues"),
+    ("issue_comment", "Comments"),
+    ("create", "Branch or tag created"),
+    ("delete", "Branch or tag deleted"),
+];
+
 #[derive(Template)]
 #[template(path = "repo_settings.html")]
 struct SettingsPage {
@@ -33,6 +68,9 @@ struct SettingsPage {
     notice: Option<&'static str>,
     error: Option<String>,
     full_name: String,
+    rules: Vec<RuleView>,
+    webhooks: Vec<WebhookView>,
+    webhook_events: &'static [(&'static str, &'static str)],
 }
 
 /// Load a repository for its settings: signed in, and owner or site admin. Others get
@@ -75,6 +113,63 @@ async fn settings_page(
         })
         .map(|(_, name)| name)
         .collect();
+    let rules = db::branch_rules(&state.db, repo.repo.id)
+        .await?
+        .into_iter()
+        .map(|r| {
+            let mut parts = Vec::new();
+            if r.require_pull_request {
+                parts.push("changes through pull requests".to_owned());
+            }
+            if r.required_approvals > 0 {
+                let n = r.required_approvals;
+                parts.push(format!(
+                    "{n} approving review{}",
+                    if n == 1 { "" } else { "s" }
+                ));
+            }
+            if r.block_force_push {
+                parts.push("no force pushes".to_owned());
+            }
+            if r.block_deletion {
+                parts.push("can't be deleted".to_owned());
+            }
+            RuleView {
+                id: r.id,
+                pattern: r.pattern,
+                summary: parts.join(" · "),
+            }
+        })
+        .collect();
+    let mut webhooks = Vec::new();
+    for hook in db::webhooks(&state.db, repo.repo.id).await? {
+        let deliveries = db::recent_deliveries(&state.db, hook.id, 10)
+            .await?
+            .into_iter()
+            .map(|d| DeliveryView {
+                id: d.id,
+                detail: match (d.response_status, &d.error) {
+                    (Some(code), _) => format!("HTTP {code} in {} ms", d.duration_ms.unwrap_or(0)),
+                    (None, Some(error)) => error.chars().take(120).collect(),
+                    (None, None) => "Waiting to be sent".to_owned(),
+                },
+                time_ago: super::render::time_ago(d.created),
+                // Pretty-printed, so it's readable in the page.
+                payload: serde_json::from_str::<serde_json::Value>(&d.payload)
+                    .and_then(|v| serde_json::to_string_pretty(&v))
+                    .unwrap_or(d.payload),
+                response: d.response_body.unwrap_or_default(),
+                event: d.event,
+                status: d.status,
+            })
+            .collect();
+        webhooks.push(WebhookView {
+            id: hook.id,
+            url: hook.url,
+            events: hook.events.replace(',', ", "),
+            deliveries,
+        });
+    }
     page(SettingsPage {
         viewer: repo.viewer.clone(),
         repo: repo.context(state, "settings"),
@@ -83,6 +178,9 @@ async fn settings_page(
         notice,
         error,
         full_name: format!("{}/{}", repo.repo.owner_name, repo.repo.name),
+        rules,
+        webhooks,
+        webhook_events: WEBHOOK_EVENTS,
     })
 }
 
@@ -226,4 +324,146 @@ pub async fn delete(
     db::destroy_repo(&state.db, &state.repos, &repo.repo).await?;
     tracing::info!(repo = %full_name, by = ?repo.viewer.user.as_ref().map(|u| &u.username), "deleted repository");
     Ok(Redirect::to(&format!("/{}", repo.repo.owner_name)).into_response())
+}
+
+// ---- Branch protection ----
+
+#[derive(Deserialize)]
+pub struct RuleForm {
+    csrf: String,
+    pattern: String,
+    require_pull_request: Option<String>,
+    #[serde(default)]
+    required_approvals: i64,
+    block_force_push: Option<String>,
+    block_deletion: Option<String>,
+}
+
+pub async fn add_rule(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((owner, name)): Path<(String, String)>,
+    Form(form): Form<RuleForm>,
+) -> WebResult {
+    let repo = load_admin(&state, viewer, &owner, &name).await?;
+    repo.viewer.check_csrf(&form.csrf)?;
+    let pattern = form.pattern.trim();
+    let error = if !db::is_valid_pattern(pattern) {
+        Some(
+            "Name a branch, or a pattern like release/* (letters, numbers, -, _, ., / and *)."
+                .to_owned(),
+        )
+    } else {
+        db::add_branch_rule(
+            &state.db,
+            repo.repo.id,
+            &db::NewBranchRule {
+                pattern,
+                require_pull_request: form.require_pull_request.is_some(),
+                required_approvals: form.required_approvals,
+                block_force_push: form.block_force_push.is_some(),
+                block_deletion: form.block_deletion.is_some(),
+            },
+        )
+        .await
+        .err()
+        .map(|e| e.to_string())
+    };
+    match error {
+        Some(error) => settings_page(&state, &repo, None, Some(error)).await,
+        None => Ok(Redirect::to(&format!("{}/settings#protection", repo.url)).into_response()),
+    }
+}
+
+pub async fn delete_rule(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((owner, name, id)): Path<(String, String, i64)>,
+    Form(form): Form<CsrfForm>,
+) -> WebResult {
+    let repo = load_admin(&state, viewer, &owner, &name).await?;
+    repo.viewer.check_csrf(&form.csrf)?;
+    db::delete_branch_rule(&state.db, repo.repo.id, id).await?;
+    Ok(Redirect::to(&format!("{}/settings#protection", repo.url)).into_response())
+}
+
+// ---- Webhooks ----
+
+#[derive(Deserialize)]
+pub struct WebhookForm {
+    csrf: String,
+    url: String,
+    #[serde(default)]
+    secret: String,
+    /// Checked events; repeated fields.
+    #[serde(default)]
+    event: Vec<String>,
+}
+
+pub async fn add_webhook(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((owner, name)): Path<(String, String)>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<WebhookForm>,
+) -> WebResult {
+    let repo = load_admin(&state, viewer, &owner, &name).await?;
+    let user = repo
+        .viewer
+        .require(&format!("{}/settings", repo.url))?
+        .clone();
+    repo.viewer.check_csrf(&form.csrf)?;
+    let url = form.url.trim();
+    let events: Vec<&str> = form
+        .event
+        .iter()
+        .map(String::as_str)
+        .filter(|e| WEBHOOK_EVENTS.iter().any(|(name, _)| name == e))
+        .collect();
+    let error = if !(url.starts_with("https://") || url.starts_with("http://"))
+        || url.len() > 2000
+        || url.contains(char::is_whitespace)
+    {
+        Some("Enter an http:// or https:// URL.")
+    } else if events.is_empty() {
+        Some("Choose at least one event.")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        return settings_page(&state, &repo, None, Some(error.into())).await;
+    }
+    let id = db::add_webhook(
+        &state.db,
+        repo.repo.id,
+        url,
+        form.secret.trim(),
+        &events.join(","),
+    )
+    .await?;
+    crate::events::ping(&state, &repo.repo, id, &user).await?;
+    Ok(Redirect::to(&format!("{}/settings#webhooks", repo.url)).into_response())
+}
+
+pub async fn delete_webhook(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((owner, name, id)): Path<(String, String, i64)>,
+    Form(form): Form<CsrfForm>,
+) -> WebResult {
+    let repo = load_admin(&state, viewer, &owner, &name).await?;
+    repo.viewer.check_csrf(&form.csrf)?;
+    db::delete_webhook(&state.db, repo.repo.id, id).await?;
+    Ok(Redirect::to(&format!("{}/settings#webhooks", repo.url)).into_response())
+}
+
+pub async fn redeliver(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((owner, name, id)): Path<(String, String, i64)>,
+    Form(form): Form<CsrfForm>,
+) -> WebResult {
+    let repo = load_admin(&state, viewer, &owner, &name).await?;
+    repo.viewer.check_csrf(&form.csrf)?;
+    db::redeliver(&state.db, repo.repo.id, id, &crate::events::guid()).await?;
+    Ok(Redirect::to(&format!("{}/settings#webhooks", repo.url)).into_response())
 }

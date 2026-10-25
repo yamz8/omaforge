@@ -3,7 +3,7 @@
 use anyhow::Result;
 use forge_git::{Identity, MergeMethod, Repository};
 
-use crate::{db, web, AppState};
+use crate::{auth, db, events, hooks::RefUpdate, web, AppState};
 
 /// Commits considered when looking for "fixes #N" in a merged pull request.
 const COMMIT_LIMIT: usize = 250;
@@ -76,6 +76,9 @@ pub async fn merge_pull(
     if !pull.is_open() || !tips.head_exists || !tips.base_exists {
         return Ok(Err("This pull request can't be merged.".into()));
     }
+    if let Some(reason) = merge_blocker(state, repo, pull).await? {
+        return Ok(Err(reason));
+    }
     let message = match method {
         MergeMethod::Squash if pull.body.is_empty() => {
             format!("{} (#{})\n", pull.title, pull.number)
@@ -129,6 +132,16 @@ pub async fn merge_pull(
     )
     .await?;
     tracing::info!(repo = %format!("{}/{}", repo.owner_name, repo.name), number = pull.number, user = %user.username, method = method_name, "merged pull request");
+    // The merge moved the base branch without a push, so record it like one.
+    let update = RefUpdate {
+        old: tips.base_sha.clone(),
+        new: merge_sha.clone(),
+        name: format!("refs/heads/{}", pull.base_branch),
+    };
+    if let Err(error) = events::push(state, repo, user, &update).await {
+        tracing::warn!(error = format!("{error:#}"), "couldn't record merge push");
+    }
+    events::pull_request(state, repo, pull.number, "closed", user).await;
 
     // "Fixes #12" in the pull request or its commits closes issue #12.
     let commits = git
@@ -176,4 +189,62 @@ pub async fn check_new_pull(
         return Ok(Err("There's nothing to merge."));
     }
     Ok(Ok((base_sha, head_sha)))
+}
+
+/// `(approvals, changes requested)` that count for branch protection: the latest review
+/// from each reviewer with write access (anyone can review, but only they decide).
+pub async fn review_counts(state: &AppState, repo: &db::Repo, issue_id: i64) -> Result<(i64, i64)> {
+    let mut latest: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for review in db::reviews(&state.db, issue_id).await? {
+        if review.state != "commented" {
+            latest.insert(review.author, review.state);
+        }
+    }
+    let mut counted = std::collections::HashMap::new();
+    for (author, review_state) in latest {
+        let Some(user) = db::user_by_username(&state.db, &author).await? else {
+            continue;
+        };
+        if auth::access(&state.db, Some(&user), repo).await? >= auth::Access::Write {
+            counted.insert(author, review_state);
+        }
+    }
+    let latest = counted;
+    let approvals = latest.values().filter(|s| *s == "approved").count() as i64;
+    let changes = latest
+        .values()
+        .filter(|s| *s == "changes_requested")
+        .count() as i64;
+    Ok((approvals, changes))
+}
+
+/// What branch protection says stops this pull request from being merged, if anything.
+pub async fn merge_blocker(
+    state: &AppState,
+    repo: &db::Repo,
+    pull: &db::Pull,
+) -> Result<Option<String>> {
+    let rules = db::branch_rules(&state.db, repo.id).await?;
+    let Some(rule) = db::rule_for_branch(&rules, &pull.base_branch) else {
+        return Ok(None);
+    };
+    if rule.required_approvals == 0 {
+        return Ok(None);
+    }
+    let (approvals, changes) = review_counts(state, repo, pull.issue_id).await?;
+    Ok(if changes > 0 {
+        Some(format!(
+            "{} is protected and changes were requested; they need to be approved first.",
+            pull.base_branch
+        ))
+    } else if approvals < rule.required_approvals {
+        let n = rule.required_approvals;
+        Some(format!(
+            "{} is protected: it needs {n} approving review{} from people with write access ({approvals} so far).",
+            pull.base_branch,
+            if n == 1 { "" } else { "s" }
+        ))
+    } else {
+        None
+    })
 }

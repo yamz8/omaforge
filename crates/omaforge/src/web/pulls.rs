@@ -18,7 +18,7 @@ use super::{
     repo::{load, CommitView, Loaded, RepoContext},
     Viewer, WebError, WebResult,
 };
-use crate::{actions, db, AppState};
+use crate::{actions, db, events, hooks::RefUpdate, AppState};
 
 /// Commits shown when comparing branches or on a pull request.
 const COMMIT_LIMIT: usize = 250;
@@ -412,6 +412,7 @@ pub async fn open(
                 )
                 .await?;
                 tracing::info!(repo = %repo.url, number, user = %user.username, "opened pull request");
+                events::pull_request(&state, &repo.repo, number, "opened", &user).await;
                 return Ok(Redirect::to(&format!("{}/pull/{number}", repo.url)).into_response());
             }
         }
@@ -422,9 +423,11 @@ pub async fn open(
 // ---- Conversation ----
 
 struct MergeBox {
-    /// `merged`, `closed`, `missing`, `uptodate`, `conflicts` or `clean`.
+    /// `merged`, `closed`, `missing`, `uptodate`, `conflicts`, `blocked` or `clean`.
     status: &'static str,
     conflicts: Vec<String>,
+    /// Why branch protection stops the merge.
+    blocked_by: Option<String>,
     can_merge: bool,
     merged_by: String,
     merge_url: String,
@@ -550,6 +553,16 @@ async fn conversation_page(
             Mergeability::UpToDate => ("uptodate", Vec::new()),
         }
     };
+    let blocked_by = if status == "clean" {
+        actions::merge_blocker(state, &repo.repo, pull).await?
+    } else {
+        None
+    };
+    let status = if blocked_by.is_some() {
+        "blocked"
+    } else {
+        status
+    };
     let merge_sha = pull.merge_sha.clone().unwrap_or_default();
     let head_now = repo
         .git
@@ -558,6 +571,7 @@ async fn conversation_page(
     let merge = MergeBox {
         status,
         conflicts,
+        blocked_by,
         can_merge: writer && status == "clean",
         merged_by: pull.merged_by.clone().unwrap_or_default(),
         merge_url: format!("{}/commit/{merge_sha}", repo.url),
@@ -782,6 +796,10 @@ pub async fn comment(
         anchor.as_ref(),
     )
     .await?;
+    // Line comments are part of reviews; conversation comments are `issue_comment`s.
+    if anchor.is_none() {
+        events::comment(&state, &repo.repo, number, body, &user).await;
+    }
     let back = match &anchor {
         Some(a) => format!(
             "{pull_url}/files#diff-{}",
@@ -839,6 +857,7 @@ pub async fn review(
         &live.head_sha,
     )
     .await?;
+    events::review(&state, &repo.repo, number, &form.state, body, &user).await;
     Ok(Redirect::to(&format!("{pull_url}#bottom")).into_response())
 }
 
@@ -917,8 +936,11 @@ pub async fn set_state(
             None,
         )
         .await?;
+        events::comment(&state, &repo.repo, number, form.body.trim(), &user).await;
     }
     db::set_issue_state(&state.db, live.pull.issue_id, user.id, reopen).await?;
+    let action = if reopen { "reopened" } else { "closed" };
+    events::pull_request(&state, &repo.repo, number, action, &user).await;
     Ok(Redirect::to(&format!("{pull_url}#bottom")).into_response())
 }
 
@@ -956,6 +978,17 @@ pub async fn delete_branch(
             &live.pull.head_branch,
         )
         .await?;
+        let update = RefUpdate {
+            old: live.head_sha.clone(),
+            new: "0".repeat(40),
+            name: format!("refs/heads/{}", live.pull.head_branch),
+        };
+        if let Err(error) = events::push(&state, &repo.repo, &user, &update).await {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "couldn't record branch deletion"
+            );
+        }
     }
     Ok(Redirect::to(&format!("{pull_url}#bottom")).into_response())
 }

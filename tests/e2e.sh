@@ -500,6 +500,83 @@ else
     check "bad token rejected"          bash -c "GH_ENTERPRISE_TOKEN=omf_nope gh api user 2>&1 | grep -q 'Bad credentials'"
 fi
 
+echo "== Branch protection"
+$BIN admin create-repo alice/guarded >/dev/null
+GUARD=http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/guarded.git
+git init -q -b main guard-src && (cd guard-src && echo one >f && git add f && git commit -qm one && git push -q $GUARD main)
+GS=$(csrf $A /alice/guarded/settings)
+post $A /alice/guarded/settings/branches csrf=$GS pattern=main require_pull_request=on required_approvals=1 block_force_push=on block_deletion=on >/dev/null
+post $A /alice/guarded/settings/branches csrf=$GS 'pattern=release/*' required_approvals=0 block_force_push=on block_deletion=on >/dev/null
+check "rules listed in settings"    bash -c "curl -s -b $A $URL/alice/guarded/settings | grep -q 'changes through pull requests · 1 approving review · no force pushes' && curl -s -b $A $URL/alice/guarded/settings | grep -q 'release/\*'"
+check "bad pattern refused"         bash -c "post $A /alice/guarded/settings/branches csrf=$GS 'pattern=../x' >/dev/null; grep -q 'pattern like release' $W/post.html"
+(cd guard-src && echo two >>f && git commit -qam two)
+BLOCKED_SHA=$(git -C guard-src rev-parse HEAD)
+check "direct push refused"         bash -c "! git -C guard-src push $GUARD main 2>$W/push.err && grep -q 'main is protected: changes must go through a pull request' $W/push.err"
+check "refused push over SSH too"   bash -c "! GIT_SSH_COMMAND='$(ssh_as alice)' git -C guard-src push $SSH_URL/alice/guarded.git main 2>$W/push.err && grep -q 'changes must go through a pull request' $W/push.err"
+check "refused objects not stored"  bash -c "! git --git-dir $OMAFORGE_DATA/repos/alice/guarded.git cat-file -e $BLOCKED_SHA 2>/dev/null"
+check "unprotected branch pushes"   git -C guard-src push -q $GUARD HEAD:feature
+check "create protected release/1"  git -C guard-src push -q $GUARD HEAD~1:refs/heads/release/1
+check "fast-forward release/1"      git -C guard-src push -q $GUARD HEAD:release/1
+check "force push refused"          bash -c "! git -C guard-src push -f $GUARD HEAD~1:release/1 2>$W/push.err && grep -q 'release/1 is protected: force pushes' $W/push.err"
+check "deleting refused"            bash -c "! git -C guard-src push $GUARD :release/1 2>$W/push.err && grep -q \"release/1 is protected and can't be deleted\" $W/push.err"
+# `release/*` doesn't reach into deeper paths, so this branch is unprotected.
+check "pattern doesn't nest"        git -C guard-src push -q $GUARD HEAD:release/next/hotfix
+check "unprotected delete works"    git -C guard-src push -q $GUARD :release/next/hotfix
+PRN=$(post $A /alice/guarded/pulls csrf=$(csrf $A "/alice/guarded/compare?base=main&head=feature") base=main head=feature title=Two | grep -o '[0-9]*$')
+check "merge blocked w/o approval"  bash -c "curl -s -b $A $URL/alice/guarded/pull/$PRN | grep -q 'Merging is blocked' && ! curl -s -b $A $URL/alice/guarded/pull/$PRN | grep -q 'Merge pull request</button>'"
+post $A /alice/guarded/pull/$PRN/merge csrf=$(csrf $A /alice/guarded/pull/$PRN) method=merge >/dev/null
+check "forced merge refused"        bash -c "grep -q 'needs 1 approving review' $W/post.html && [ \$(git ls-remote $GUARD refs/heads/main 2>/dev/null | cut -f1) != $BLOCKED_SHA ]"
+QUERY="{\"query\":\"{repository(owner:\\\"alice\\\",name:\\\"guarded\\\"){pullRequest(number:$PRN){mergeStateStatus baseRef{branchProtectionRule{requiredApprovingReviewCount}}}}}\"}"
+curl -s -H "Authorization: token $WEB_TOKEN" -H 'content-type: application/json' --data "$QUERY" $URL/api/graphql >$W/gql.json
+check "API says BLOCKED"            bash -c "grep -q '\"mergeStateStatus\":\"BLOCKED\"' $W/gql.json && grep -q '\"requiredApprovingReviewCount\":1' $W/gql.json"
+post $B /alice/guarded/pull/$PRN/review csrf=$(csrf $B /alice/guarded/pull/$PRN) state=approved >/dev/null
+check "reader's approval not enough" bash -c "curl -s -b $A $URL/alice/guarded/pull/$PRN | grep -q 'Merging is blocked'"
+$BIN admin add-collaborator alice/guarded carol --role write >/dev/null
+post $C /alice/guarded/pull/$PRN/review csrf=$(csrf $C /alice/guarded/pull/$PRN) state=approved >/dev/null
+check "writer's approval unblocks"  bash -c "curl -s -b $A $URL/alice/guarded/pull/$PRN | grep -q 'Merge pull request</button>'"
+check "merge into protected main"   test "$(post $A /alice/guarded/pull/$PRN/merge csrf=$(csrf $A /alice/guarded/pull/$PRN) method=merge)" = "303 $URL/alice/guarded/pull/$PRN"
+check "bob can't change rules"      test "$(post $B /alice/guarded/settings/branches csrf=$(csrf $B /settings/keys) pattern=x | cut -d' ' -f1)" = 404
+
+echo "== Webhooks"
+HOOK_PORT=${E2E_HOOK_PORT:-3924}
+HOOK_LOG=$W/webhooks.jsonl; : >$HOOK_LOG
+python3 -I $ROOT/tests/webhook_receiver.py $HOOK_PORT $HOOK_LOG s3cret & RECEIVER=$!
+trap 'kill $SERVER $PROXY $RECEIVER 2>/dev/null' EXIT
+sleep 0.3
+# wait_for <jq-ish python expr>: until a logged delivery matches (5 s).
+wait_for() { for _ in $(seq 50); do python3 -I -c "
+import json,sys
+rows=[json.loads(l) for l in open('$HOOK_LOG')]
+sys.exit(0 if any($1 for r in rows) else 1)" && return 0; sleep 0.1; done; return 1; }
+export HOOK_LOG; export -f wait_for
+GS=$(csrf $A /alice/guarded/settings)
+R=$(post $A /alice/guarded/settings/webhooks csrf=$GS url=http://127.0.0.1:$HOOK_PORT/hook secret=s3cret event=push event=pull_request event=issues event=issue_comment)
+check "add webhook"                 test "$R" = "303 $URL/alice/guarded/settings#webhooks"
+check "ping delivered, signed"      wait_for "r['event']=='ping' and r['signature_ok'] and r['user_agent'].startswith('omaforge-Hookshot')"
+post $A /alice/guarded/settings/webhooks csrf=$GS url=http://127.0.0.1:$HOOK_PORT/fail secret=s3cret event=issues >/dev/null
+(cd guard-src && git fetch -q $GUARD main && git checkout -q -B release/1 FETCH_HEAD 2>/dev/null; git checkout -q -b release/2 && echo r >r && git add r && git commit -qm "Release two" && git push -q $GUARD release/2)
+check "push event"                  wait_for "r['event']=='push' and r['payload']['ref']=='refs/heads/release/2' and r['payload']['created'] and r['payload']['pusher']['name']=='alice' and r['payload']['head_commit']['message']=='Release two'"
+(cd guard-src && echo r2 >>r && git commit -qam "Second commit" && git push -q $GUARD release/2)
+check "push lists new commits"      wait_for "r['event']=='push' and r['payload']['ref']=='refs/heads/release/2' and not r['payload']['created'] and [c['message'] for c in r['payload']['commits']]==['Second commit'] and r['payload']['repository']['full_name']=='alice/guarded'"
+PR2N=$(post $A /alice/guarded/pulls csrf=$(csrf $A "/alice/guarded/compare?base=main&head=release/2") base=main head=release/2 "title=Release two" | grep -o '[0-9]*$')
+check "pull_request opened"         wait_for "r['event']=='pull_request' and r['payload']['action']=='opened' and r['payload']['number']==$PR2N"
+post $C /alice/guarded/pull/$PR2N/review csrf=$(csrf $C /alice/guarded/pull/$PR2N) state=approved >/dev/null
+post $A /alice/guarded/pull/$PR2N/merge csrf=$(csrf $A /alice/guarded/pull/$PR2N) method=merge >/dev/null
+check "merge recorded as a push"    wait_for "r['event']=='push' and r['payload']['ref']=='refs/heads/main' and 'Merge pull request #$PR2N' in r['payload']['head_commit']['message']"
+check "pull_request closed/merged"  wait_for "r['event']=='pull_request' and r['payload']['action']=='closed' and r['payload']['pull_request']['merged']"
+post $B /alice/guarded/issues csrf=$(csrf $B /alice/guarded/issues/new) "title=Webhook test" >/dev/null
+ISS=$(db "select max(number) from issues where repo_id = (select id from repos where name = 'guarded')")
+check "issues opened"               wait_for "r['event']=='issues' and r['payload']['action']=='opened' and r['payload']['issue']['title']=='Webhook test' and r['payload']['sender']['login']=='bob' and r['path']=='/hook'"
+post $B /alice/guarded/issues/$ISS/comment csrf=$(csrf $B /alice/guarded/issues/$ISS) "body=Hello hooks" >/dev/null
+check "issue_comment created"       wait_for "r['event']=='issue_comment' and r['payload']['comment']['body']=='Hello hooks'"
+check "failing hook retried"        bash -c "sleep 1; [ \"\$(db \"select status || ':' || attempts || ':' || response_status from deliveries d join webhooks w on w.id = d.webhook_id where w.url like '%/fail' and d.event = 'issues' order by d.id limit 1\")\" = 'pending:1:500' ]"
+check "event filter respected"      bash -c "[ \"\$(db \"select count(*) from deliveries d join webhooks w on w.id = d.webhook_id where w.url like '%/fail' and d.event = 'push'\")\" = 0 ]"
+check "deliveries shown"            bash -c "curl -s -b $A $URL/alice/guarded/settings | grep -q 'HTTP 200 in' && curl -s -b $A $URL/alice/guarded/settings | grep -q 'HTTP 500 in'"
+DID=$(db "select min(d.id) from deliveries d join webhooks w on w.id = d.webhook_id where w.url like '%/hook' and d.event = 'ping'")
+post $A /alice/guarded/settings/deliveries/$DID/redeliver csrf=$(csrf $A /alice/guarded/settings) >/dev/null
+check "redeliver"                   bash -c "for _ in \$(seq 50); do [ \$(grep -c '\"event\": \"ping\"' $HOOK_LOG) -ge 2 ] && exit 0; sleep 0.1; done; exit 1"
+check "bob can't add webhooks"      test "$(post $B /alice/guarded/settings/webhooks csrf=$(csrf $B /settings/keys) url=http://x.example event=push | cut -d' ' -f1)" = 404
+
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
     echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10

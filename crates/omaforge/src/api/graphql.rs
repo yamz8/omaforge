@@ -14,7 +14,7 @@ use forge_git::{Mergeability, Repository};
 use crate::{
     actions,
     auth::{self, Access},
-    db, web, AppState,
+    db, events, web, AppState,
 };
 
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
@@ -743,13 +743,26 @@ pub struct BranchProtectionRule {
 pub struct Ref {
     name: String,
     prefix: String,
+    #[graphql(skip)]
+    repo_id: i64,
 }
 
 #[async_graphql::ComplexObject]
 impl Ref {
-    /// No branch protection yet.
-    async fn branch_protection_rule(&self) -> Option<BranchProtectionRule> {
-        None
+    async fn branch_protection_rule(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<BranchProtectionRule>> {
+        let rules = db::branch_rules(&api(ctx).state.db, self.repo_id)
+            .await
+            .or_internal()?;
+        Ok(
+            db::rule_for_branch(&rules, &self.name).map(|r| BranchProtectionRule {
+                requires_strict_status_checks: false,
+                requires_approving_reviews: r.required_approvals > 0,
+                required_approving_review_count: Some(r.required_approvals),
+            }),
+        )
     }
 }
 
@@ -875,6 +888,7 @@ impl RepositoryNode {
         Ok(branch.map(|name| Ref {
             name,
             prefix: "refs/heads/".into(),
+            repo_id: self.repo.id,
         }))
     }
 
@@ -1826,24 +1840,30 @@ impl PullRequestNode {
         if !tips.head_exists || !tips.base_exists {
             return Ok(MergeStateStatus::Unknown);
         }
-        Ok(
-            match self
-                .repo
-                .git(state)
-                .mergeability(&tips.base_sha, &tips.head_sha)
-                .await
-                .or_internal()?
-            {
-                Mergeability::Clean | Mergeability::UpToDate => MergeStateStatus::Clean,
-                Mergeability::Conflicts(_) => MergeStateStatus::Dirty,
-            },
-        )
+        let mergeability = self
+            .repo
+            .git(state)
+            .mergeability(&tips.base_sha, &tips.head_sha)
+            .await
+            .or_internal()?;
+        if let Mergeability::Conflicts(_) = mergeability {
+            return Ok(MergeStateStatus::Dirty);
+        }
+        let blocked = actions::merge_blocker(state, &self.repo.repo, &self.pull)
+            .await
+            .or_internal()?;
+        Ok(if blocked.is_some() {
+            MergeStateStatus::Blocked
+        } else {
+            MergeStateStatus::Clean
+        })
     }
 
     async fn base_ref(&self) -> Option<Ref> {
         Some(Ref {
             name: self.pull.base_branch.clone(),
             prefix: "refs/heads/".into(),
+            repo_id: self.repo.repo.id,
         })
     }
 
@@ -1852,6 +1872,7 @@ impl PullRequestNode {
         Ok(exists.then(|| Ref {
             name: self.pull.head_branch.clone(),
             prefix: "refs/heads/".into(),
+            repo_id: self.repo.repo.id,
         }))
     }
 
@@ -2679,6 +2700,14 @@ async fn change_labels(
     db::set_issue_labels(&api.state.db, repo.repo.id, issue_id, user.id, &current)
         .await
         .or_internal()?;
+    notify(
+        api,
+        &repo,
+        &node,
+        if add { "labeled" } else { "unlabeled" },
+        user,
+    )
+    .await;
     Ok(LabelablePayload {
         labelable: Some(reload_labelable(api, &node).await?),
         client_mutation_id: input.client_mutation_id,
@@ -2716,6 +2745,14 @@ async fn change_assignees(
     db::set_assignees(&api.state.db, issue_id, user.id, &current)
         .await
         .or_internal()?;
+    notify(
+        api,
+        &repo,
+        &node,
+        if add { "assigned" } else { "unassigned" },
+        user,
+    )
+    .await;
     Ok(AssignablePayload {
         assignable: Some(reload_labelable(api, &node).await?),
         client_mutation_id: input.client_mutation_id,
@@ -2756,7 +2793,26 @@ async fn edit_text(
     )
     .await
     .or_internal()?;
+    notify(api, &repo, &node, "edited", user).await;
     Ok(())
+}
+
+/// Send the webhook event for an issue or pull request changing.
+async fn notify(
+    api: &ApiContext,
+    repo: &RepositoryNode,
+    node: &Labelable,
+    action: &str,
+    user: &db::User,
+) {
+    match node {
+        Labelable::Issue(i) => {
+            events::issue(&api.state, &repo.repo, i.issue.number, action, user).await
+        }
+        Labelable::PullRequest(p) => {
+            events::pull_request(&api.state, &repo.repo, p.pull.number, action, user).await
+        }
+    }
 }
 
 #[Object]
@@ -2800,6 +2856,15 @@ impl Mutation {
         )
         .await
         .or_internal()?;
+        events::review(
+            &api.state,
+            &node.repo.repo,
+            node.pull.number,
+            state,
+            body,
+            user,
+        )
+        .await;
         let review = db::reviews(&api.state.db, node.pull.issue_id)
             .await
             .or_internal()?
@@ -3007,6 +3072,7 @@ impl Mutation {
         )
         .await
         .or_internal()?;
+        events::pull_request(&api.state, &repo.repo, number, "opened", user).await;
         let pull = db::pull(&api.state.db, repo.repo.id, number)
             .await
             .or_internal()?;
@@ -3112,6 +3178,7 @@ impl Mutation {
                     .or_internal()?;
             }
         }
+        events::issue(&api.state, &repo.repo, number, "opened", &user).await;
         Ok(IssuePayload {
             issue: Some(IssueNode { issue, repo }),
             client_mutation_id: input.client_mutation_id,
@@ -3175,6 +3242,11 @@ impl Mutation {
         db::add_comment(&api.state.db, issue_id, user.id, body, None)
             .await
             .or_internal()?;
+        let number = match &subject {
+            CommentSubject::Issue(i) => i.issue.number,
+            CommentSubject::PullRequest(p) => p.pull.number,
+        };
+        events::comment(&api.state, &repo.repo, number, body, user).await;
         let comment = db::comments(&api.state.db, issue_id)
             .await
             .or_internal()?
@@ -3219,6 +3291,8 @@ async fn set_pull_state(
         db::set_issue_state(&api.state.db, node.pull.issue_id, user.id, open)
             .await
             .or_internal()?;
+        let action = if open { "reopened" } else { "closed" };
+        events::pull_request(&api.state, &node.repo.repo, node.pull.number, action, user).await;
     }
     Ok(PullRequestPayload {
         pull_request: Some(reload_pull(api, &node).await?),
@@ -3238,6 +3312,8 @@ async fn set_issue_state(api: &ApiContext, node: &IssueNode, open: bool) -> Resu
         db::set_issue_state(&api.state.db, node.issue.issue_id, user.id, open)
             .await
             .or_internal()?;
+        let action = if open { "reopened" } else { "closed" };
+        events::issue(&api.state, &node.repo.repo, node.issue.number, action, user).await;
     }
     Ok(())
 }

@@ -3,14 +3,8 @@
 //! There is no shell; anything other than those two commands is refused.
 
 use std::{
-    collections::HashMap,
-    io::Write,
-    net::SocketAddr,
-    os::unix::fs::OpenOptionsExt,
-    path::{Path, PathBuf},
-    process::Stdio,
-    sync::Arc,
-    time::Duration,
+    collections::HashMap, io::Write, net::SocketAddr, os::unix::fs::OpenOptionsExt, path::Path,
+    process::Stdio, sync::Arc, time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -22,7 +16,7 @@ use russh::{
     server::{Auth, ChannelOpenHandle, Config, Handler, Msg, Server, Session},
     Channel, ChannelId, MethodKind, MethodSet,
 };
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     db::{self, User},
@@ -202,8 +196,8 @@ impl Handler for Connection {
         };
         let decision =
             git_service::authorize(&self.state, self.user.as_ref(), owner, repo, service).await?;
-        let path = match decision {
-            Decision::Allowed(path) => path,
+        let grant = match decision {
+            Decision::Allowed(grant) => grant,
             Decision::ReadOnly => {
                 let message = "omaforge: you do not have write access to this repository\n";
                 tokio::spawn(finish(channel, message.into(), 1));
@@ -217,8 +211,9 @@ impl Handler for Connection {
         };
 
         let protocol = self.git_protocol.remove(&id);
+        let state = self.state.clone();
         tokio::spawn(async move {
-            if let Err(error) = run_git(channel, service, path, protocol).await {
+            if let Err(error) = run_git(state, channel, service, grant, protocol).await {
                 tracing::warn!(%error, "{} over SSH failed", service.name());
             }
         });
@@ -228,21 +223,17 @@ impl Handler for Connection {
 
 /// Pipe the channel to and from a git process, then report its exit status.
 async fn run_git(
+    state: AppState,
     channel: Channel<Msg>,
     service: Service,
-    path: PathBuf,
+    grant: git_service::Grant,
     protocol: Option<String>,
 ) -> Result<()> {
-    let mut command = Command::new("git");
+    let mut command = git_service::command(&state, service, &grant, &[], protocol.as_deref());
     command
-        .arg(service.subcommand())
-        .arg(&path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(protocol) = protocol {
-        command.env("GIT_PROTOCOL", protocol);
-    }
     let mut child = command.spawn()?;
     let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())

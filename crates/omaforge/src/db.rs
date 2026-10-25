@@ -1,8 +1,12 @@
 mod issues;
+mod protection;
 mod pulls;
+mod webhooks;
 
 pub use issues::*;
+pub use protection::*;
 pub use pulls::*;
+pub use webhooks::*;
 
 use std::path::Path;
 
@@ -99,6 +103,15 @@ pub async fn user_email(db: &SqlitePool, user_id: i64) -> Result<Option<String>>
         .fetch_optional(db)
         .await?;
     Ok(email.flatten())
+}
+
+pub async fn user_by_id(db: &SqlitePool, id: i64) -> Result<Option<User>> {
+    let user =
+        sqlx::query_as("SELECT id, username, password_hash, is_admin FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    Ok(user)
 }
 
 pub async fn user_by_username(db: &SqlitePool, username: &str) -> Result<Option<User>> {

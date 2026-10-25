@@ -42,7 +42,8 @@ browser ──HTTP──▶ axum ─┬─ HTML views ──▶ forge-git / db
                         ├─ /api/v3, /api/graphql (GitHub-compatible)
                         └─ /{owner}/{repo}.git/* ──▶ git upload-pack / receive-pack
 ssh client ──SSH──▶ russh ──auth (keys in db)──▶ git upload-pack / receive-pack
-receive-pack ──post-receive hook──▶ jobs (webhooks, CI, sync push, PR updates)
+receive-pack ──pre-receive hook──▶ branch protection (refuse with a reason)
+             ──post-receive hook──▶ events → deliveries queue → webhook worker
 ```
 
 ## GitHub migration and sync

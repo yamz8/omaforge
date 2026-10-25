@@ -58,6 +58,77 @@
   </form>
   {% endif %}
 
+  <h2 id="protection">Branch protection</h2>
+  <p class="muted">Protected branches can only change the way a rule allows. Pushes that break a rule are refused, with the reason shown to the pusher.</p>
+  <div class="box">
+    {% if rules.is_empty() %}
+    <div class="empty-state">No protected branches.</div>
+    {% else %}
+    <ul class="credential-list">
+      {% for r in rules %}
+      <li>
+        <div class="summary"><span class="branch">{{ r.pattern }}</span><div class="meta">{{ r.summary }}</div></div>
+        <form method="post" action="{{ repo.url }}/settings/branches/{{ r.id }}/delete"><input type="hidden" name="csrf" value="{{ viewer.csrf }}"><button class="button danger" type="submit">Remove</button></form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  <form class="box form rule-form" method="post" action="{{ repo.url }}/settings/branches">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <label>Branch or pattern<input name="pattern" placeholder="main, or release/*" required maxlength="200"></label>
+    <fieldset class="checks">
+      <label class="choice"><input type="checkbox" name="require_pull_request" checked> <span>Require a pull request <span class="muted">(no direct pushes)</span></span></label>
+      <label class="choice"><input type="checkbox" name="block_force_push" checked> <span>Block force pushes</span></label>
+      <label class="choice"><input type="checkbox" name="block_deletion" checked> <span>Block deletion</span></label>
+      <label class="choice approvals"><span>Approving reviews required to merge</span><input type="number" name="required_approvals" value="1" min="0" max="10"></label>
+    </fieldset>
+    <button class="button primary" type="submit">Protect branch</button>
+  </form>
+
+  <h2 id="webhooks">Webhooks</h2>
+  <p class="muted">omaforge sends a POST with a GitHub-style JSON payload for each event, signed with the secret in <code>X-Hub-Signature-256</code>.</p>
+  {% for h in webhooks %}
+  <div class="box webhook">
+    <div class="box-header">
+      <span class="mono webhook-url">{{ h.url }}</span>
+      <span class="muted">{{ h.events }}</span>
+      <span class="spacer"></span>
+      <form method="post" action="{{ repo.url }}/settings/webhooks/{{ h.id }}/delete"><input type="hidden" name="csrf" value="{{ viewer.csrf }}"><button class="button danger" type="submit">Delete</button></form>
+    </div>
+    {% if h.deliveries.is_empty() %}
+    <div class="empty-state small">No deliveries yet.</div>
+    {% else %}
+    <ul class="delivery-list">
+      {% for d in h.deliveries %}
+      <li>
+        <span class="delivery-status {{ d.status }}">{% if d.status == "succeeded" %}{{ crate::web::icons::CHECK|safe }}{% else if d.status == "failed" %}{{ crate::web::icons::ALERT|safe }}{% else %}{{ crate::web::icons::HISTORY|safe }}{% endif %}</span>
+        <span class="mono">{{ d.event }}</span>
+        <span class="muted">{{ d.detail }}</span>
+        <span class="spacer"></span>
+        <span class="muted small">{{ d.time_ago }}</span>
+        <form method="post" action="{{ repo.url }}/settings/deliveries/{{ d.id }}/redeliver"><input type="hidden" name="csrf" value="{{ viewer.csrf }}"><button class="button small-button" type="submit">Redeliver</button></form>
+        <details class="delivery-details">
+          <summary class="muted small">Details</summary>
+          <h4>Payload</h4><pre>{{ d.payload }}</pre>
+          {% if !d.response.is_empty() %}<h4>Response</h4><pre>{{ d.response }}</pre>{% endif %}
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <form class="box form" method="post" action="{{ repo.url }}/settings/webhooks">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <label>Payload URL<input name="url" type="url" placeholder="https://ci.example.com/hooks/omaforge" required></label>
+    <label><span>Secret <span class="muted">(optional, but recommended)</span></span><input name="secret" autocomplete="off"></label>
+    <fieldset class="checks event-checks">
+      {% for (event, label) in webhook_events %}<label class="choice"><input type="checkbox" name="event" value="{{ event }}"{% if *event == "push" %} checked{% endif %}> <span>{{ label }}</span></label>{% endfor %}
+    </fieldset>
+    <button class="button primary" type="submit">Add webhook</button>
+  </form>
+
   <h2>Rename</h2>
   <form class="box form inline-form" method="post" action="{{ repo.url }}/settings/rename">
     <input type="hidden" name="csrf" value="{{ viewer.csrf }}">

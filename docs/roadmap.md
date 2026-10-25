@@ -22,9 +22,10 @@ Each milestone should be something you can use day to day before the next one st
 - [x] Issues: markdown, labels, assignees, comments, references (`#12`, `@name`, `fixes #12` closes on merge)
 - [x] Pull requests: compare, create, diff view, inline review comments, approve/request changes
 - [x] Merge: merge commit, squash, rebase (in the bare repo, compare-and-swap on the branch); delete merged branch
-- [ ] Branch protection basics (required review, no direct pushes)
+- [x] Branch protection: require pull requests, required approvals (from writers), block force pushes and deletion; enforced by a pre-receive hook
 - [x] Collaborators with read or write access (web settings and `admin add-collaborator`)
-- [ ] Notifications, plus webhooks with GitHub-shaped payloads
+- [x] Webhooks with GitHub-shaped, signed payloads (push, pull_request, pull_request_review, issues, issue_comment, create, delete), retries and redelivery
+- [ ] Notifications
 
 ## M2: Leave GitHub (or don't)
 - [x] `/api/v3` + `/api/graphql` subset that `gh` needs for repo/issue/PR commands (tested with real `gh`)

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use tokio::process::Command;
 
 use crate::{
     auth::{self, Access},
@@ -39,10 +40,19 @@ impl Service {
     }
 }
 
+/// Permission to run a git service on a repository.
+#[derive(Debug, Clone)]
+pub struct Grant {
+    /// The repository's bare git directory.
+    pub path: PathBuf,
+    pub repo_id: i64,
+    /// Who is pushing or fetching, if signed in.
+    pub user_id: Option<i64>,
+}
+
 #[derive(Debug)]
 pub enum Decision {
-    /// Allowed; the repo's bare git directory.
-    Allowed(PathBuf),
+    Allowed(Grant),
     /// Anonymous and not allowed. Ask for credentials rather than revealing whether the
     /// repo exists.
     NeedsLogin,
@@ -80,13 +90,37 @@ pub async fn authorize(
         Service::ReceivePack => access >= Access::Write,
     };
     Ok(match (allowed, user) {
-        (true, _) => Decision::Allowed(forge_git::repo_path(
-            &state.repos,
-            &repo.owner_name,
-            &repo.name,
-        )),
+        (true, _) => Decision::Allowed(Grant {
+            path: forge_git::repo_path(&state.repos, &repo.owner_name, &repo.name),
+            repo_id: repo.id,
+            user_id: user.map(|u| u.id),
+        }),
         (false, None) => Decision::NeedsLogin,
         (false, Some(_)) if readable => Decision::ReadOnly,
         (false, Some(_)) => Decision::NotFound,
     })
+}
+
+/// The `git upload-pack` / `git receive-pack` process for a granted request, with
+/// `extra` arguments before the repository path. Pushes run omaforge's hooks, which
+/// enforce branch protection and record the push (see `hooks`).
+pub fn command(
+    state: &AppState,
+    service: Service,
+    grant: &Grant,
+    extra: &[&str],
+    protocol: Option<&str>,
+) -> Command {
+    let mut command = Command::new("git");
+    if service == Service::ReceivePack {
+        crate::hooks::configure(&mut command, state, grant);
+    }
+    command
+        .arg(service.subcommand())
+        .args(extra)
+        .arg(&grant.path);
+    if let Some(protocol) = protocol {
+        command.env("GIT_PROTOCOL", protocol);
+    }
+    command
 }

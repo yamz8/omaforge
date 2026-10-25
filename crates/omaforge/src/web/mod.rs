@@ -159,6 +159,26 @@ pub fn routes() -> Router<AppState> {
             post(repo_settings::rename),
         )
         .route(
+            "/{owner}/{repo}/settings/branches",
+            post(repo_settings::add_rule),
+        )
+        .route(
+            "/{owner}/{repo}/settings/branches/{id}/delete",
+            post(repo_settings::delete_rule),
+        )
+        .route(
+            "/{owner}/{repo}/settings/webhooks",
+            post(repo_settings::add_webhook),
+        )
+        .route(
+            "/{owner}/{repo}/settings/webhooks/{id}/delete",
+            post(repo_settings::delete_webhook),
+        )
+        .route(
+            "/{owner}/{repo}/settings/deliveries/{id}/redeliver",
+            post(repo_settings::redeliver),
+        )
+        .route(
             "/{owner}/{repo}/settings/delete",
             post(repo_settings::delete),
         )
