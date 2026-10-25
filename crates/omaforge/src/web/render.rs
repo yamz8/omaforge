@@ -60,8 +60,26 @@ impl LinkBase<'_> {
     }
 }
 
+/// What `#123` and `@name` in a conversation can refer to: only existing issues and
+/// users are linked, like on GitHub.
+pub struct References<'a> {
+    /// `/{owner}/{repo}`
+    pub repo_url: &'a str,
+    pub issues: &'a HashSet<i64>,
+    pub users: &'a HashSet<String>,
+}
+
 /// Render GitHub-flavored Markdown to sanitized HTML.
 pub fn markdown(source: &str, base: Option<&LinkBase>) -> String {
+    markdown_with_refs(source, base, None)
+}
+
+/// Markdown for issue and pull request conversations, linking `#123` and `@name`.
+pub fn conversation(source: &str, refs: &References) -> String {
+    markdown_with_refs(source, None, Some(refs))
+}
+
+fn markdown_with_refs(source: &str, base: Option<&LinkBase>, refs: Option<&References>) -> String {
     let mut options = Options::default();
     options.extension.strikethrough = true;
     options.extension.table = true;
@@ -107,6 +125,9 @@ pub fn markdown(source: &str, base: Option<&LinkBase>) -> String {
             _ => {}
         }
     }
+    if let Some(refs) = refs {
+        link_references(&arena, root, refs);
+    }
     let mut html = String::new();
     if comrak::format_html(root, &options, &mut html).is_err() {
         return String::new();
@@ -117,6 +138,138 @@ pub fn markdown(source: &str, base: Option<&LinkBase>) -> String {
         html = html.replacen(&format!("omaforge{nonce}x{i}"), code, 1);
     }
     html
+}
+
+/// Split text nodes around references and turn those into links. Text that's already
+/// inside a link or image is left alone; code spans aren't text nodes.
+fn link_references<'a>(arena: &'a Arena<'a>, root: comrak::Node<'a>, refs: &References) {
+    let texts: Vec<comrak::Node<'a>> = root
+        .descendants()
+        .filter(|node| matches!(node.data().value, NodeValue::Text(_)))
+        .filter(|node| {
+            !node
+                .ancestors()
+                .skip(1)
+                .any(|a| matches!(a.data().value, NodeValue::Link(_) | NodeValue::Image(_)))
+        })
+        .collect();
+    for node in texts {
+        let text = match &node.data().value {
+            NodeValue::Text(text) => text.to_string(),
+            _ => continue,
+        };
+        let segments = split_references(&text, refs);
+        if !segments.iter().any(|s| matches!(s, Segment::Link { .. })) {
+            continue;
+        }
+        for segment in segments {
+            let new: comrak::Node<'a> = match segment {
+                Segment::Text(text) => arena.alloc(NodeValue::Text(text.into()).into()),
+                Segment::Link { url, text } => {
+                    let link: comrak::Node<'a> = arena.alloc(
+                        NodeValue::Link(Box::new(comrak::nodes::NodeLink {
+                            url,
+                            title: String::new(),
+                        }))
+                        .into(),
+                    );
+                    link.append(arena.alloc(NodeValue::Text(text.into()).into()));
+                    link
+                }
+            };
+            node.insert_before(new);
+        }
+        node.detach();
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Segment {
+    Text(String),
+    Link { url: String, text: String },
+}
+
+/// Find `#123` (an existing issue or pull request) and `@name` (an existing user) at word
+/// boundaries, so `a#1`, `x@y.com` and `#123abc` stay text.
+fn split_references(text: &str, refs: &References) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut plain = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let boundary = |c: Option<&char>| {
+        c.is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '_' | '&' | '/' | '#' | '@'))
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        let before_ok = boundary(if i == 0 { None } else { chars.get(i - 1) });
+        if before_ok && (c == '#' || c == '@') {
+            let word_char = |c: char| {
+                if c == '#' {
+                    |x: char| x.is_ascii_digit()
+                } else {
+                    |x: char| x.is_ascii_alphanumeric() || x == '-' || x == '_'
+                }
+            };
+            let is_word = word_char(c);
+            let end = (i + 1..chars.len())
+                .find(|&j| !is_word(chars[j]))
+                .unwrap_or(chars.len());
+            let word: String = chars[i + 1..end].iter().collect();
+            let after_ok = chars.get(end).is_none_or(|c| !c.is_alphanumeric());
+            let url = match c {
+                '#' if after_ok && !word.is_empty() && word.len() <= 9 => word
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|n| refs.issues.contains(n))
+                    .map(|n| format!("{}/issues/{n}", refs.repo_url)),
+                '@' if after_ok && refs.users.contains(&word) => Some(format!("/{word}")),
+                _ => None,
+            };
+            if let Some(url) = url {
+                if !plain.is_empty() {
+                    segments.push(Segment::Text(std::mem::take(&mut plain)));
+                }
+                segments.push(Segment::Link {
+                    url,
+                    text: format!("{c}{word}"),
+                });
+                i = end;
+                continue;
+            }
+        }
+        plain.push(c);
+        i += 1;
+    }
+    if !plain.is_empty() {
+        segments.push(Segment::Text(plain));
+    }
+    segments
+}
+
+/// Issue numbers a pull request closes when it's merged: "fixes #12", "Closes: #3",
+/// "resolved #7" (the keywords GitHub uses).
+pub fn closing_references(text: &str) -> Vec<i64> {
+    const KEYWORDS: &[&str] = &[
+        "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+    ];
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut numbers = Vec::new();
+    for pair in words.windows(2) {
+        let keyword = pair[0].trim_end_matches(':');
+        let target = pair[1].trim_end_matches(['.', ',', ';', ')', '!']);
+        if KEYWORDS.contains(&keyword) {
+            if let Some(n) = target.strip_prefix('#').and_then(|n| n.parse::<i64>().ok()) {
+                if !numbers.contains(&n) {
+                    numbers.push(n);
+                }
+            }
+        }
+    }
+    numbers
 }
 
 fn placeholder_nonce() -> String {
@@ -517,6 +670,51 @@ mod tests {
         // Classes in the document's own HTML are still stripped.
         assert!(!html.contains(r#"<span class="hl-keyword">x"#), "{html}");
         assert!(html.contains("plain &lt;b&gt;"), "{html}");
+    }
+
+    #[test]
+    fn links_references() {
+        let issues: HashSet<i64> = [1, 12].into();
+        let users: HashSet<String> = ["alice".to_owned()].into();
+        let refs = References {
+            repo_url: "/alice/hello",
+            issues: &issues,
+            users: &users,
+        };
+        let html = conversation(
+            "See #12 and #99, thanks @alice and @nobody. Mail a@alice.com, not a#1 or #12x.\n\n`#1` [#1](https://x.example)",
+            &refs,
+        );
+        assert!(
+            html.contains(r#"<a href="/alice/hello/issues/12" rel="noopener noreferrer">#12</a>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a href="/alice" rel="noopener noreferrer">@alice</a>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains("#99") && !html.contains("issues/99"),
+            "unknown issue linked: {html}"
+        );
+        assert!(!html.contains(r#"href="/nobody""#), "{html}");
+        assert!(
+            !html.contains("issues/1\""),
+            "linked inside code, an email, a#1 or an existing link: {html}"
+        );
+        assert!(html.contains("<code>#1</code>"), "{html}");
+    }
+
+    #[test]
+    fn finds_closing_references() {
+        assert_eq!(
+            closing_references("Fixes #12. Also closes: #3, resolved #12 and see #4"),
+            vec![12, 3]
+        );
+        assert_eq!(
+            closing_references("This fixes nothing #5"),
+            Vec::<i64>::new()
+        );
     }
 
     #[test]

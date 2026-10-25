@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}New issue · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="narrow wide-narrow">
+  <form class="box form" method="post" action="{{ repo.url }}/issues">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+    <label>Title<input name="title" value="{{ title }}" required autofocus></label>
+    <label><span>Description <span class="muted">(Markdown; #123 and @name link)</span></span><textarea class="prose" name="body" rows="10">{{ body }}</textarea></label>
+    <button class="button primary" type="submit">Open issue</button>
+  </form>
+</div>
+{% endblock %}

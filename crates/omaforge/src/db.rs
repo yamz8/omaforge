@@ -1,5 +1,7 @@
+mod issues;
 mod pulls;
 
+pub use issues::*;
 pub use pulls::*;
 
 use std::path::Path;
@@ -170,6 +172,7 @@ pub async fn create_repo(
     })?;
     forge_git::create_bare(repos_root, &owner.username, name)?;
     tx.commit().await?;
+    create_default_labels(db, id).await?;
     Ok(id)
 }
 

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Issue #{{ number }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="pull-header">
+  <h1>{{ title }} <span class="muted">#{{ number }}</span></h1>
+  <div class="pull-meta">
+    {% if open %}<span class="state-badge open">{{ crate::web::icons::ISSUE|safe }} Open</span>{% else %}<span class="state-badge merged">{{ crate::web::icons::ISSUE_CLOSED|safe }} Closed</span>{% endif %}
+    <span><strong>{{ author }}</strong> opened this issue {{ created_ago }} · {{ comment_count }} comment{% if comment_count != 1 %}s{% endif %}</span>
+  </div>
+</div>
+<div class="issue-layout">
+  <div class="timeline">
+    <div class="comment-box">
+      <div class="comment-meta"><strong>{{ author }}</strong> opened this {{ created_ago }}</div>
+      <div class="comment-body markdown">{% if description.is_empty() %}<p class="muted">No description provided.</p>{% else %}{{ description|safe }}{% endif %}</div>
+    </div>
+    {% include "timeline.html" %}
+    {% if viewer.user.is_some() %}
+    <form class="comment-box comment-form" id="bottom" method="post" action="{{ url }}/comment">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <textarea class="prose" name="body" rows="5" placeholder="Leave a comment (Markdown)"></textarea>
+      <div class="form-actions">
+        {% if can_close %}{% if open %}<button class="button" type="submit" name="action" value="close">{{ crate::web::icons::ISSUE_CLOSED|safe }} Close issue</button>{% else %}<button class="button" type="submit" name="action" value="reopen">Reopen issue</button>{% endif %}{% endif %}
+        <button class="button primary" type="submit">Comment</button>
+      </div>
+    </form>
+    {% else %}
+    <p class="muted center" id="bottom"><a href="/login?next={{ url }}">Sign in</a> to join the conversation.</p>
+    {% endif %}
+  </div>
+  <aside class="sidebar">
+    <section>
+      <h3>Assignees</h3>
+      {% if assignees.is_empty() %}<p class="muted">No one</p>{% else %}{% for a in assignees %}<p><a href="/{{ a }}">{{ a }}</a></p>{% endfor %}{% endif %}
+      {% if can_triage %}
+      <details class="menu right">
+        <summary class="button small-button">Edit</summary>
+        <form class="menu-body choice-list" method="post" action="{{ url }}/assignees">
+          <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+          {% for c in assignee_choices %}<label><input type="checkbox" name="id" value="{{ c.id }}"{% if c.chosen %} checked{% endif %}> {{ c.name }}</label>{% endfor %}
+          <button class="button primary" type="submit">Save</button>
+        </form>
+      </details>
+      {% endif %}
+    </section>
+    <section>
+      <h3>Labels</h3>
+      {% if labels.is_empty() %}<p class="muted">None yet</p>{% else %}<p>{% for l in labels %}<a class="label-chip" style="{{ l.style }}" href="{{ l.url }}" title="{{ l.description }}">{{ l.name }}</a>{% endfor %}</p>{% endif %}
+      {% if can_triage %}
+      <details class="menu right">
+        <summary class="button small-button">Edit</summary>
+        <form class="menu-body choice-list" method="post" action="{{ url }}/labels">
+          <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+          {% for c in label_choices %}<label><input type="checkbox" name="id" value="{{ c.id }}"{% if c.chosen %} checked{% endif %}> <span class="label-chip" style="{{ c.style }}">{{ c.name }}</span></label>{% endfor %}
+          <button class="button primary" type="submit">Save</button>
+        </form>
+      </details>
+      {% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

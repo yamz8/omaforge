@@ -73,3 +73,15 @@ icon!(
     r#"<path d="M8 1.75 14.75 13.5H1.25Z"/><path d="M8 6v3.5M8 11.5v.25"/>"#
 );
 icon!(COMMENT, r#"<path d="M2 3.25h12v8H8.5L5 14v-2.75H2Z"/>"#);
+icon!(
+    PERSON,
+    r#"<circle cx="8" cy="5" r="2.75"/><path d="M2.75 14c.5-3 2.6-4.5 5.25-4.5s4.75 1.5 5.25 4.5"/>"#
+);
+icon!(
+    ISSUE,
+    r#"<circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="1"/>"#
+);
+icon!(
+    ISSUE_CLOSED,
+    r#"<circle cx="8" cy="8" r="6.25"/><path d="M5.25 8.25 7.25 10.25 10.75 6"/>"#
+);

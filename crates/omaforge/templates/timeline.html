@@ -1,0 +1,21 @@
+  {% for t in timeline %}
+  {% if t.kind == "comment" %}
+  <div class="comment-box" id="comment-{{ t.id }}">
+    <div class="comment-meta"><strong>{{ t.who }}</strong> commented {{ t.time_ago }}{% if let Some((label, url)) = t.context %} on <a class="mono" href="{{ url }}">{{ label }}</a>{% endif %}</div>
+    <div class="comment-body markdown">{{ t.html|safe }}</div>
+  </div>
+  {% else if t.kind == "review" %}
+  <div class="timeline-event review {{ t.tone }}" id="review-{{ t.id }}">
+    <span class="event-icon">{% if t.tone == "approved" %}{{ crate::web::icons::CHECK|safe }}{% else if t.tone == "changes_requested" %}{{ crate::web::icons::ALERT|safe }}{% else %}{{ crate::web::icons::COMMENT|safe }}{% endif %}</span>
+    <div class="event-body">
+      <div><strong>{{ t.who }}</strong> {{ t.text }} {{ t.time_ago }}</div>
+      {% if !t.html.is_empty() %}<div class="markdown review-body">{{ t.html|safe }}</div>{% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="timeline-event {{ t.tone }}">
+    <span class="event-icon">{% if t.tone == "merged" %}{{ crate::web::icons::MERGED|safe }}{% else if t.tone == "closed" %}{{ crate::web::icons::CLOSED_PULL|safe }}{% else if t.tone == "closed_by" %}{{ crate::web::icons::CHECK|safe }}{% else if t.tone == "reopened" %}{{ crate::web::icons::PULL|safe }}{% else if t.tone == "labeled" || t.tone == "unlabeled" %}{{ crate::web::icons::TAG|safe }}{% else if t.tone == "assigned" || t.tone == "unassigned" %}{{ crate::web::icons::PERSON|safe }}{% else %}{{ crate::web::icons::BRANCH|safe }}{% endif %}</span>
+    <div class="event-body"><strong>{{ t.who }}</strong> {{ t.text }}{% if let Some((label, url)) = t.context %} <a href="{{ url }}">{{ label }}</a>{% endif %} {{ t.time_ago }}</div>
+  </div>
+  {% endif %}
+  {% endfor %}

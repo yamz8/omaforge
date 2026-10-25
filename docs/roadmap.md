@@ -19,7 +19,7 @@ Each milestone should be something you can use day to day before the next one st
 - [ ] Repository settings on the web (description, visibility, rename, delete)
 
 ## M1: Collaborate
-- [ ] Issues: markdown, labels, assignees, comments, references (`#12`, `fixes #12`)
+- [x] Issues: markdown, labels, assignees, comments, references (`#12`, `@name`, `fixes #12` closes on merge)
 - [x] Pull requests: compare, create, diff view, inline review comments, approve/request changes
 - [x] Merge: merge commit, squash, rebase (in the bare repo, compare-and-swap on the branch); delete merged branch
 - [ ] Branch protection basics (required review, no direct pushes)

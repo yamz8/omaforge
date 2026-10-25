@@ -12,6 +12,7 @@ use forge_git::{diff::FileStatus, Identity, MergeMethod, Mergeability};
 use serde::Deserialize;
 
 use super::{
+    conversation::{self, Branches, Mentions, Timeline, TimelineEntry},
     diff::{self, path_hash, FileView, InlineComment, LineCommentForm},
     icons, page, render,
     repo::{load, CommitView, Loaded, RepoContext},
@@ -36,9 +37,13 @@ struct Live {
 /// Look up a pull request and, while it's open, follow its branches to their current
 /// tips (and remember them, so the pull request survives its branch being deleted).
 async fn live_pull(state: &AppState, repo: &Loaded, number: i64) -> WebResult<Live> {
-    let pull = db::pull(&state.db, repo.repo.id, number)
-        .await?
-        .ok_or(WebError::NotFound)?;
+    let pull = match db::pull(&state.db, repo.repo.id, number).await? {
+        Some(pull) => pull,
+        None if db::number_kind(&state.db, repo.repo.id, number).await? == Some(false) => {
+            return Err(WebError::Redirect(format!("{}/issues/{number}", repo.url)));
+        }
+        None => return Err(WebError::NotFound),
+    };
     let mut live = Live {
         base_sha: pull.base_sha.clone(),
         head_sha: pull.head_sha.clone(),
@@ -465,21 +470,6 @@ pub async fn open(
 
 // ---- Conversation ----
 
-struct TimelineEntry {
-    /// `comment`, `review` or `event`.
-    kind: &'static str,
-    id: i64,
-    who: String,
-    /// What happened, for reviews and events ("approved these changes", "merged …").
-    text: String,
-    html: String,
-    time_ago: String,
-    /// `approved`, `changes_requested`, `merged`, `closed`, ... for styling.
-    tone: String,
-    /// For review comments: the file and line, linking into the diff.
-    context: Option<(String, String)>,
-}
-
 struct MergeBox {
     /// `merged`, `closed`, `missing`, `uptodate`, `conflicts` or `clean`.
     status: &'static str,
@@ -539,7 +529,8 @@ async fn conversation_page(
         .unwrap_or(0);
     let pull_url = format!("{}/pull/{}", repo.url, pull.number);
 
-    let mut timeline: Vec<(i64, i64, TimelineEntry)> = Vec::new();
+    let mentions = Mentions::load(state, repo).await?;
+    let mut timeline = Timeline::default();
     for c in db::comments(&state.db, pull.issue_id).await? {
         let context = match (&c.path, c.line, &c.side) {
             (Some(path), Some(line), Some(side)) => Some((
@@ -548,20 +539,7 @@ async fn conversation_page(
             )),
             _ => None,
         };
-        timeline.push((
-            c.created,
-            c.id,
-            TimelineEntry {
-                kind: "comment",
-                id: c.id,
-                who: c.author,
-                text: String::new(),
-                html: render::markdown(&c.body, None),
-                time_ago: render::time_ago(c.created),
-                tone: String::new(),
-                context,
-            },
-        ));
+        timeline.push(c.created, conversation::comment(c, &mentions, context));
     }
     let reviews = db::reviews(&state.db, pull.issue_id).await?;
     let mut latest: BTreeMap<String, String> = BTreeMap::new();
@@ -578,49 +556,30 @@ async fn conversation_page(
         if r.commit_sha != live.head_sha {
             text.push_str(" on an earlier version");
         }
-        timeline.push((
+        timeline.push(
             r.created,
-            r.id,
             TimelineEntry {
                 kind: "review",
                 id: r.id,
                 who: r.author.clone(),
                 text,
-                html: render::markdown(&r.body, None),
+                html: mentions.render(&r.body),
                 time_ago: render::time_ago(r.created),
                 tone: r.state.clone(),
                 context: None,
             },
-        ));
+        );
     }
+    let branches = Branches {
+        base: &pull.base_branch,
+        head: &pull.head_branch,
+    };
     for e in db::events(&state.db, pull.issue_id).await? {
-        let text = match e.kind.as_str() {
-            "merged" => format!(
-                "merged commit {} into {}",
-                &e.detail[..7.min(e.detail.len())],
-                pull.base_branch
-            ),
-            "closed" => "closed this".into(),
-            "reopened" => "reopened this".into(),
-            "branch_deleted" => format!("deleted the {} branch", pull.head_branch),
-            other => other.to_owned(),
-        };
-        timeline.push((
+        timeline.push(
             e.created,
-            e.id,
-            TimelineEntry {
-                kind: "event",
-                id: e.id,
-                who: e.actor,
-                text,
-                html: String::new(),
-                time_ago: render::time_ago(e.created),
-                tone: e.kind,
-                context: None,
-            },
-        ));
+            conversation::event(e, &repo.url, Some(&branches)),
+        );
     }
-    timeline.sort_by_key(|(created, id, entry)| (*created, entry.kind != "comment", *id));
 
     let writer = can_write(repo);
     let (status, conflicts) = if pull.is_merged() {
@@ -663,8 +622,8 @@ async fn conversation_page(
         viewer: repo.viewer.clone(),
         repo: repo.context(state, "pulls"),
         pull: pull_context(repo, &live, commits.len(), files, "conversation"),
-        description: render::markdown(&pull.body, None),
-        timeline: timeline.into_iter().map(|(_, _, entry)| entry).collect(),
+        description: mentions.render(&pull.body),
+        timeline: timeline.finish(),
         merge,
         can_close: pull.is_open() && (writer || author),
         can_reopen: !pull.is_open()
@@ -1019,6 +978,20 @@ pub async fn merge(
             )
             .await?;
             tracing::info!(repo = %repo.url, number, user = %user.username, method = %form.method, "merged pull request");
+            // "Fixes #12" in the pull request or its commits closes issue #12.
+            let commits = repo
+                .git
+                .compare_log(&live.base_sha, &live.head_sha, COMMIT_LIMIT)
+                .await?;
+            let mut text = format!("{}\n{}\n", pull.title, pull.body);
+            for commit in &commits {
+                text.push_str(&format!("{}\n{}\n", commit.subject, commit.body));
+            }
+            for closes in render::closing_references(&text) {
+                if let Some(issue) = db::issue(&state.db, repo.repo.id, closes).await? {
+                    db::close_issue_by(&state.db, issue.issue_id, user.id, pull.number).await?;
+                }
+            }
             Ok(Redirect::to(&pull_url).into_response())
         }
         Err(error) => {

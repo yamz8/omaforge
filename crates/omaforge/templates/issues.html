@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Issues · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="toolbar">
+  <form class="search" method="get" action="{{ repo.url }}/issues">
+    {% if !showing_open %}<input type="hidden" name="state" value="closed">{% endif %}
+    {% if !label.is_empty() %}<input type="hidden" name="label" value="{{ label }}">{% endif %}
+    <input type="search" name="q" value="{{ search }}" placeholder="Search issue titles" aria-label="Search issues">
+  </form>
+  <a class="button" href="{{ repo.url }}/labels">{{ crate::web::icons::TAG|safe }}Labels</a>
+  <span class="spacer"></span>
+  {% if viewer.user.is_some() %}<a class="button primary" href="{{ repo.url }}/issues/new">New issue</a>{% endif %}
+</div>
+{% if !label.is_empty() || !search.is_empty() %}
+<p class="filter-note muted">Showing issues{% if !label.is_empty() %} labeled <strong>{{ label }}</strong>{% endif %}{% if !search.is_empty() %} matching <strong>{{ search }}</strong>{% endif %}. <a href="{{ repo.url }}/issues">Clear filters</a></p>
+{% endif %}
+<div class="box">
+  <div class="box-header">
+    <div class="segmented">
+      <a href="{{ repo.url }}/issues?state=open{{ filter_query }}"{% if showing_open %} class="active"{% endif %}>{{ crate::web::icons::ISSUE|safe }}{{ open_count }} Open</a>
+      <a href="{{ repo.url }}/issues?state=closed{{ filter_query }}"{% if !showing_open %} class="active"{% endif %}>{{ crate::web::icons::ISSUE_CLOSED|safe }}{{ closed_count }} Closed</a>
+    </div>
+    <span class="spacer"></span>
+    {% if !labels.is_empty() %}
+    <details class="menu right">
+      <summary class="button">{{ crate::web::icons::TAG|safe }}Label</summary>
+      <div class="menu-body">
+        <div class="menu-title">Filter by label</div>
+        {% for l in labels %}<a href="{{ l.url }}"><span class="label-chip" style="{{ l.style }}">{{ l.name }}</span></a>{% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% if issues.is_empty() %}
+  <div class="empty-state">
+    {% if showing_open %}No open issues{% else %}No closed issues{% endif %}{% if !label.is_empty() || !search.is_empty() %} match those filters{% endif %}.
+    {% if viewer.user.is_some() && showing_open && label.is_empty() && search.is_empty() %}<p><a href="{{ repo.url }}/issues/new">Open one</a>.</p>{% endif %}
+  </div>
+  {% else %}
+  <ul class="issue-list">
+    {% for i in issues %}
+    <li>
+      <span class="state-icon {% if i.open %}open{% else %}merged{% endif %}">{% if i.open %}{{ crate::web::icons::ISSUE|safe }}{% else %}{{ crate::web::icons::ISSUE_CLOSED|safe }}{% endif %}</span>
+      <div class="summary">
+        <a class="subject" href="{{ i.url }}">{{ i.title }}</a>
+        {% for l in i.labels %}<a class="label-chip" style="{{ l.style }}" href="{{ l.url }}" title="{{ l.description }}">{{ l.name }}</a>{% endfor %}
+        <div class="meta">#{{ i.number }} opened {{ i.created_ago }} by {{ i.author }}{% if !i.assignees.is_empty() %} · assigned to {% for a in i.assignees %}{% if !loop.first %}, {% endif %}{{ a }}{% endfor %}{% endif %}</div>
+      </div>
+      {% if i.comment_count > 0 %}<a class="muted comment-count" href="{{ i.url }}">{{ crate::web::icons::COMMENT|safe }} {{ i.comment_count }}</a>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

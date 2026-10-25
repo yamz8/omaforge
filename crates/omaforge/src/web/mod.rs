@@ -1,7 +1,9 @@
 //! The HTML interface: server-rendered pages with no JavaScript required.
 
+mod conversation;
 mod diff;
 mod icons;
+mod issues;
 mod pulls;
 pub mod render;
 mod repo;
@@ -94,6 +96,32 @@ pub fn routes() -> Router<AppState> {
         .route("/{owner}/{repo}/commits", get(repo::commits_default))
         .route("/{owner}/{repo}/commits/{*rest}", get(repo::commits))
         .route("/{owner}/{repo}/commit/{id}", get(repo::commit))
+        .route(
+            "/{owner}/{repo}/issues",
+            get(issues::list).post(issues::create),
+        )
+        .route("/{owner}/{repo}/issues/new", get(issues::new_form))
+        .route("/{owner}/{repo}/issues/{number}", get(issues::show))
+        .route(
+            "/{owner}/{repo}/issues/{number}/comment",
+            post(issues::comment),
+        )
+        .route(
+            "/{owner}/{repo}/issues/{number}/labels",
+            post(issues::set_labels),
+        )
+        .route(
+            "/{owner}/{repo}/issues/{number}/assignees",
+            post(issues::set_assignees),
+        )
+        .route(
+            "/{owner}/{repo}/labels",
+            get(issues::labels).post(issues::create_label),
+        )
+        .route(
+            "/{owner}/{repo}/labels/{id}/delete",
+            post(issues::delete_label),
+        )
         .route("/{owner}/{repo}/pulls", get(pulls::list).post(pulls::open))
         .route("/{owner}/{repo}/compare", get(pulls::compare))
         .route("/{owner}/{repo}/pull/{number}", get(pulls::conversation))
@@ -144,6 +172,8 @@ pub enum WebError {
     SignIn(String),
     /// A form without a valid CSRF token.
     Forbidden,
+    /// The thing lives at another URL (e.g. `/pull/3` when #3 is an issue).
+    Redirect(String),
     Internal(anyhow::Error),
 }
 
@@ -168,6 +198,7 @@ impl IntoResponse for WebError {
                 let next: String = form_urlencode(&next);
                 return Redirect::to(&format!("/login?next={next}")).into_response();
             }
+            Self::Redirect(url) => return Redirect::permanent(&url).into_response(),
             Self::Forbidden => (
                 StatusCode::FORBIDDEN,
                 "This form expired or didn't come from omaforge. Go back, reload the page and try again.",

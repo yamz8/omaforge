@@ -33,9 +33,10 @@ pub(super) struct RepoContext {
     pub(super) is_private: bool,
     pub(super) http_clone: String,
     pub(super) ssh_clone: Option<String>,
-    /// `code`, `pulls`, `commits`, `branches` or `tags`.
+    /// `code`, `issues`, `pulls`, `commits`, `branches` or `tags`.
     pub(super) tab: &'static str,
     pub(super) open_pulls: i64,
+    pub(super) open_issues: i64,
 }
 
 pub(super) struct RefLink {
@@ -73,6 +74,7 @@ pub(super) struct Loaded {
     pub(super) git: Repository,
     pub(super) url: String,
     pub(super) open_pulls: i64,
+    pub(super) open_issues: i64,
 }
 
 impl Loaded {
@@ -91,6 +93,7 @@ impl Loaded {
                 .ssh_clone_url(&self.repo.owner_name, &self.repo.name),
             tab,
             open_pulls: self.open_pulls,
+            open_issues: self.open_issues,
         }
     }
 
@@ -192,12 +195,14 @@ pub(super) async fn load(
     ));
     let url = format!("/{}/{}", repo.owner_name, repo.name);
     let (open_pulls, _) = db::pull_counts(&state.db, repo.id).await?;
+    let (open_issues, _) = db::issue_counts(&state.db, repo.id).await?;
     Ok(Loaded {
         viewer,
         repo,
         git,
         url,
         open_pulls,
+        open_issues,
     })
 }
 

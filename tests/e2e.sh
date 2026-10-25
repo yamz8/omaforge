@@ -171,6 +171,9 @@ check "token created on web"        test -n "$WEB_TOKEN"
 check "web token clones private"    git clone -q http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/secret.git web-secret
 ssh-keygen -q -t ed25519 -N '' -C carol@test -f "$W/carol"
 db() { sqlite3 "$OMAFORGE_DATA/omaforge.db" "$1"; }
+# Let checks run as `bash -c` use the helpers too.
+export W URL
+export -f post csrf db
 R=$(post $A /settings/keys csrf=$(csrf $A /settings/keys) name=carol "key=$(cat $W/carol.pub)")
 check "SSH key added on web"        test "$R" = "303 $URL/settings/keys"
 check "web key works over SSH"      env GIT_SSH_COMMAND="$(ssh_as carol)" git clone -q $SSH_URL/alice/secret.git web-ssh
@@ -329,6 +332,60 @@ check "rebase: commits replayed"    bash -c "git -C prs-src fetch -q $PRS main &
 check "rebase: linear history"      bash -c "[ \$(git -C prs-src log -1 --format=%P FETCH_HEAD | wc -w) = 1 ] && [ \"\$(git -C prs-src log -1 --format='%an|%cn' FETCH_HEAD)\" = 'test|alice' ]"
 check "merged PR files still work"  bash -c "curl -s $URL/alice/prs/pull/4/files | grep -q 'r.txt'"
 check "private repo PRs hidden"     test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/secret/pulls)" = 404
+
+echo "== Issues"
+$BIN admin create-repo alice/tracker >/dev/null
+TR=/alice/tracker
+icsrf() { csrf $1 "$TR/issues/$2"; }
+check "default labels created"      bash -c "curl -s $URL$TR/labels | grep -q 'good first issue' && curl -s $URL$TR/labels | grep -q '7 labels'"
+check "new issue needs sign-in"     bash -c "curl -s -o /dev/null -w '%{redirect_url}' $URL$TR/issues/new | grep -q '/login?next=/alice/tracker/issues/new'"
+R=$(post $B $TR/issues csrf=$(csrf $B $TR/issues/new) "title=Crash when the plate is empty" $'body=Steps:\n\n1. Load an empty plate\n\nThanks @alice')
+check "bob opens issue #1"          test "$R" = "303 $URL$TR/issues/1"
+check "empty title refused"         bash -c "post $B $TR/issues csrf=$(csrf $B $TR/issues/new) title=' ' >/dev/null; grep -q 'Give the issue a title' $W/post.html"
+post $A $TR/issues csrf=$(csrf $A $TR/issues/new) "title=Document the CSV format" >/dev/null
+check "issue page renders"          bash -c "curl -s $URL$TR/issues/1 | grep -q 'Load an empty plate'"
+check "@mention links to user"      bash -c "curl -s $URL$TR/issues/1 | grep -q '<a href=\"/alice\" rel=\"noopener noreferrer\">@alice</a>'"
+post $A $TR/issues/1/comment csrf=$(icsrf $A 1) "body=Same as #2? Not #99." >/dev/null
+check "#ref links existing issue"   bash -c "curl -s $URL$TR/issues/1 | grep -q 'href=\"/alice/tracker/issues/2\"' && ! curl -s $URL$TR/issues/1 | grep -q 'issues/99'"
+LABEL_BUG=$(db "select l.id from labels l join repos r on r.id = l.repo_id where r.name = 'tracker' and l.name = 'bug'")
+LABEL_Q=$(db "select l.id from labels l join repos r on r.id = l.repo_id where r.name = 'tracker' and l.name = 'question'")
+check "bob can't label"             test "$(post $B $TR/issues/1/labels csrf=$(icsrf $B 1) id=$LABEL_BUG | cut -d' ' -f1)" = 403
+post $A $TR/issues/1/labels csrf=$(icsrf $A 1) id=$LABEL_BUG id=$LABEL_Q >/dev/null
+check "labels applied"              bash -c "curl -s $URL$TR/issues/1 | grep -q 'added the bug label' && curl -s $URL$TR/issues | grep -q 'class=\"label-chip\"'"
+post $A $TR/issues/1/labels csrf=$(icsrf $A 1) id=$LABEL_BUG >/dev/null
+check "label removed"               bash -c "curl -s $URL$TR/issues/1 | grep -q 'removed the question label'"
+BOB_ID=$(db "select id from users where username = 'bob'")
+post $A $TR/issues/1/assignees csrf=$(icsrf $A 1) id=$BOB_ID >/dev/null
+check "assigned"                    bash -c "curl -s $URL$TR/issues/1 | grep -q 'assigned bob' && curl -s $URL$TR/issues | grep -q 'assigned to bob'"
+check "filter by label"             bash -c "curl -s '$URL$TR/issues?label=bug' | grep -q 'Crash when the plate' && ! curl -s '$URL$TR/issues?label=bug' | grep -q 'Document the CSV'"
+check "search titles"               bash -c "curl -s '$URL$TR/issues?q=csv' | grep -q 'Document the CSV' && ! curl -s '$URL$TR/issues?q=csv' | grep -q 'Crash when'"
+check "search escapes wildcards"    bash -c "! curl -s '$URL$TR/issues?q=%25' | grep -q 'Crash when'"
+check "issues tab count"            bash -c "curl -s $URL$TR | grep -A0 'Issues' | grep -q '<span class=\"count\">2</span>'"
+post $B $TR/issues/2/comment csrf=$(icsrf $B 2) action=close >/dev/null
+check "non-author can't close"      bash -c "[ \"\$(db \"select state from issues where number = 2 and repo_id = (select id from repos where name = 'tracker')\")\" = open ]"
+post $B $TR/issues/1/comment csrf=$(icsrf $B 1) "body=Fixed locally" action=close >/dev/null
+check "author comments and closes"  bash -c "curl -s $URL$TR/issues/1 | grep -q 'Fixed locally' && curl -s $URL$TR/issues/1 | grep -q 'closed this' && curl -s '$URL$TR/issues?state=closed' | grep -q 'Crash when'"
+post $B $TR/issues/1/comment csrf=$(icsrf $B 1) action=reopen >/dev/null
+check "author reopens"              bash -c "curl -s $URL$TR/issues/1 | grep -q 'reopened this'"
+TRK=http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/tracker.git
+git init -q -b main tr-src && (cd tr-src && echo a >a && git add a && git commit -qm init && git push -q $TRK main \
+    && git checkout -qb fix-crash && echo b >b && git add b && git commit -qm "Handle empty plates" -m "Fixes #1" && git push -q $TRK fix-crash)
+check "PR shares numbering (#3)"    test "$(post $B $TR/pulls csrf=$(csrf $B "$TR/compare?base=main&head=fix-crash") base=main head=fix-crash 'title=Handle empty plates' 'body=See #2')" = "303 $URL$TR/pull/3"
+check "issue URL redirects to PR"   bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' $URL$TR/issues/3)\" = '308 $URL$TR/pull/3' ]"
+check "PR URL redirects to issue"   bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' $URL$TR/pull/1)\" = '308 $URL$TR/issues/1' ]"
+check "PR body links #2"            bash -c "curl -s $URL$TR/pull/3 | grep -q 'href=\"/alice/tracker/issues/2\"'"
+post $A $TR/pull/3/merge csrf=$(csrf $A $TR/pull/3) method=squash >/dev/null
+check "merge closes 'Fixes #1'"     bash -c "curl -s $URL$TR/issues/1 | grep -q 'closed this in' && curl -s $URL$TR/issues/1 | grep -q 'href=\"/alice/tracker/pull/3\"' && [ \"\$(db \"select state from issues where number = 1 and repo_id = (select id from repos where name = 'tracker')\")\" = closed ]"
+check "#2 only mentioned, open"     test "$(db "select state from issues where number = 2 and repo_id = (select id from repos where name = 'tracker')")" = open
+R=$(post $A $TR/labels csrf=$(csrf $A $TR/labels) name=urgent color=#ff0000 description=Now)
+check "create label"                bash -c "[ '$R' = '303 $URL$TR/labels' ] && curl -s $URL$TR/labels | grep -q 'urgent'"
+check "bad label color refused"     bash -c "post $A $TR/labels csrf=$(csrf $A $TR/labels) name=evil 'color=red;x' >/dev/null; grep -q 'a color like' $W/post.html"
+check "duplicate label refused"     bash -c "post $A $TR/labels csrf=$(csrf $A $TR/labels) name=URGENT color=#00ff00 >/dev/null; grep -q 'already exists' $W/post.html"
+URGENT=$(db "select l.id from labels l join repos r on r.id = l.repo_id where r.name = 'tracker' and l.name = 'urgent'")
+check "bob can't delete label"      test "$(post $B $TR/labels/$URGENT/delete csrf=$(csrf $B $TR/labels) | cut -d' ' -f1)" = 403
+post $A $TR/labels/$URGENT/delete csrf=$(csrf $A $TR/labels) >/dev/null
+check "alice deletes label"         bash -c "! curl -s $URL$TR/labels | grep -q 'urgent'"
+check "private repo issues hidden"  test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/secret/issues)" = 404
 
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
