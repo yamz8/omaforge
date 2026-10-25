@@ -18,6 +18,14 @@ git push http://alice:<token>@127.0.0.1:3000/alice/hello.git main
 git push ssh://git@127.0.0.1:2222/alice/hello.git main
 ```
 
+Import repositories you already have on disk (private by default; re-run with
+`--update` to bring in new commits, which only ever fast-forwards):
+
+```sh
+cargo run -- import local ~/code/* --owner alice --dry-run
+cargo run -- import local ~/code/* --owner alice
+```
+
 Run the end-to-end tests (real server, real git over HTTP and SSH) with:
 
 ```sh

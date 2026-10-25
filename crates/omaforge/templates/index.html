@@ -15,7 +15,7 @@
   <ul class="repo-list">
     {% for repo in repos %}
     <li>
-      <a class="name" href="{{ repo.url }}">{{ repo.full_name }}</a>{% if repo.is_private %} <span class="badge">{{ crate::web::icons::LOCK|safe }} Private</span>{% endif %}
+      <div class="repo-line"><a class="name" href="{{ repo.url }}">{{ repo.full_name }}</a>{% if repo.is_private %}<span class="badge">{{ crate::web::icons::LOCK|safe }} Private</span>{% endif %}</div>
       {% if !repo.description.is_empty() %}<p>{{ repo.description }}</p>{% endif %}
       {% if let Some(updated) = repo.updated %}<p class="muted">Updated {{ updated }}</p>{% else %}<p class="muted">Empty</p>{% endif %}
     </li>

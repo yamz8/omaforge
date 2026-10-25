@@ -3,6 +3,7 @@ mod db;
 mod git_http;
 mod git_service;
 mod git_ssh;
+mod import;
 mod web;
 
 use std::{
@@ -51,6 +52,33 @@ enum Command {
     /// Administrative tasks.
     #[command(subcommand)]
     Admin(AdminCommand),
+    /// Bring existing repositories into omaforge.
+    #[command(subcommand)]
+    Import(ImportCommand),
+}
+
+#[derive(Subcommand)]
+enum ImportCommand {
+    /// Import git repositories from folders on this machine. Each folder becomes a repo
+    /// named after it, with its branches, tags and any branches only on `origin`.
+    Local {
+        /// Repository folders (working trees or bare repositories).
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// User who will own the imported repositories.
+        #[arg(long)]
+        owner: String,
+        /// Make the repositories public (they are private by default).
+        #[arg(long)]
+        public: bool,
+        /// Fetch new commits into repositories imported before, instead of skipping them.
+        /// Branches only fast-forward; nothing is overwritten.
+        #[arg(long)]
+        update: bool,
+        /// Show what would be imported without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +182,21 @@ async fn main() -> Result<()> {
             serve(&cli.data, state, listen, ssh_listen).await
         }
         Command::Admin(command) => admin(&state, command).await,
+        Command::Import(ImportCommand::Local {
+            paths,
+            owner,
+            public,
+            update,
+            dry_run,
+        }) => {
+            let options = import::Options {
+                owner,
+                public,
+                update,
+                dry_run,
+            };
+            import::local(&state, &paths, &options).await
+        }
     }
 }
 

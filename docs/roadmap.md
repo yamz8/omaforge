@@ -15,7 +15,7 @@ Each milestone should be something you can use day to day before the next one st
 - [x] Omarchy-themed UI (follows the active Omarchy theme live)
 - [x] Code browser for private repos (owner and admins)
 - [ ] Blame, compare views, syntax-highlighted diffs
-- [ ] `omaforge import local <dirs…>`: bulk-import existing local repositories
+- [x] `omaforge import local <dirs…>`: bulk-import existing local repositories (`--update` to re-sync)
 - [ ] Repository settings on the web (description, visibility, rename, delete)
 
 ## M1: Collaborate

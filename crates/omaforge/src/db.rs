@@ -239,6 +239,16 @@ pub async fn visible_repos(
     Ok(repos)
 }
 
+/// Remove a repository's row; the caller removes it from disk.
+pub async fn delete_repo(db: &SqlitePool, owner_id: i64, name: &str) -> Result<()> {
+    sqlx::query("DELETE FROM repos WHERE owner_id = ? AND name = ?")
+        .bind(owner_id)
+        .bind(name)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_repo_description(
     db: &SqlitePool,
     owner_id: i64,

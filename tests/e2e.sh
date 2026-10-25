@@ -200,6 +200,59 @@ post $A /logout csrf=$(csrf $A /settings/keys) >/dev/null
 check "sign out"                    test "$(curl -s -o /dev/null -w '%{http_code}' -b $A $URL/alice/secret)" = 404
 check "signed-out cookie is dead"   test "$(db "select count(*) from sessions s join users u on u.id = s.user_id where u.username = 'alice'")" = 0
 
+echo "== Import local"
+F=$W/fixtures && mkdir -p $F && (
+    cd $F
+    git init -q --bare upstream.git
+    git clone -q upstream.git seed 2>/dev/null && cd seed && echo one >a && git add a && git commit -qm one \
+        && git tag v2 && git checkout -qb feature/remote-only && echo two >b && git add b && git commit -qm two \
+        && git push -q origin main feature/remote-only v2 && cd .. && rm -rf seed
+    git clone -q upstream.git "clone a" && cd "clone a" && git checkout -qb wip && echo wip >w && git add w \
+        && git commit -qm wip && git tag local-1 && echo stash >>a && git stash -q && echo dirty >>a \
+        && mkdir sub && touch sub/x && git checkout -q main 2>/dev/null; cd $F
+    git clone -q --bare upstream.git "Bare Project.git" && echo "Bare project from upstream" >"Bare Project.git/description"
+    mkdir notgit && touch notgit/file
+    git init -q emptyrepo
+    git init -q -b master master-only && git -C master-only commit -q --allow-empty -m first
+)
+REFS_BEFORE=$(git -C "$F/clone a" for-each-ref --format='%(objectname) %(refname)' | sha256sum)
+OUT=$($BIN import local "$F/clone a" "$F/Bare Project.git" "$F/notgit" "$F/clone a/sub" "$F/emptyrepo" "$F/master-only" --owner alice 2>&1)
+echo "$OUT" | sed 's/^/    | /'
+check "imports working tree"        grep -q 'imported .*clone a -> alice/clone-a (3 branches, 2 tags)' <<<"$OUT"
+check "imports bare repo"           grep -q 'imported .*Bare Project.git -> alice/Bare-Project (2 branches, 1 tag)' <<<"$OUT"
+check "warns about dirty tree"      grep -q 'has 2 uncommitted or untracked files (not imported)' <<<"$OUT"
+check "warns about stash"           grep -q 'has 1 stash entry (not imported)' <<<"$OUT"
+check "skips non-repo folder"       grep -q 'skipped .*notgit: not a git repository' <<<"$OUT"
+check "skips folder inside repo"    grep -q 'skipped .*clone a/sub: not a git repository' <<<"$OUT"
+check "skips repo without commits"  grep -q 'skipped .*emptyrepo: no commits' <<<"$OUT"
+check "summary line"                grep -q '^3 imported, 3 skipped, 0 failed$' <<<"$OUT"
+check "source repo untouched"       test "$(git -C "$F/clone a" for-each-ref --format='%(objectname) %(refname)' | sha256sum)" = "$REFS_BEFORE"
+check "imported repos are private"  test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/clone-a)" = 404
+TOK=http://alice:$WEB_TOKEN@127.0.0.1:$PORT
+check "origin-only branch imported" bash -c "git ls-remote $TOK/alice/clone-a.git | grep -q 'refs/heads/feature/remote-only$'"
+check "local branch and tag too"    bash -c "git ls-remote $TOK/alice/clone-a.git | grep -q 'refs/heads/wip$' && git ls-remote $TOK/alice/clone-a.git | grep -q 'refs/tags/local-1$'"
+check "content matches source"      bash -c "[ \"\$(git ls-remote $TOK/alice/clone-a.git refs/heads/wip | cut -f1)\" = \"\$(git -C '$F/clone a' rev-parse wip)\" ]"
+check "default branch from source"  bash -c "git ls-remote --symref $TOK/alice/clone-a.git HEAD | grep -q 'ref: refs/heads/main'"
+check "default branch master"       bash -c "git ls-remote --symref $TOK/alice/master-only.git HEAD | grep -q 'ref: refs/heads/master'"
+check "description kept"            test "$(db "select description from repos where name='Bare-Project'")" = "Bare project from upstream"
+OUT=$($BIN import local "$F/clone a" --owner alice 2>&1)
+check "re-run skips existing"       grep -q 'skipped .*alice/clone-a already exists (use --update)' <<<"$OUT"
+(cd "$F/clone a" && git checkout -q wip && echo more >>w && git commit -qam more)
+OUT=$($BIN import local "$F/clone a" --owner alice --update 2>&1)
+check "update fetches new commits"  bash -c "grep -q 'updated .*alice/clone-a' <<<'$OUT' && [ \"\$(git ls-remote $TOK/alice/clone-a.git refs/heads/wip | cut -f1)\" = \"\$(git -C '$F/clone a' rev-parse wip)\" ]"
+SERVER_WIP=$(git ls-remote $TOK/alice/clone-a.git refs/heads/wip 2>/dev/null | cut -f1)
+(cd "$F/clone a" && git commit -q --amend -m rewritten)
+OUT=$($BIN import local "$F/clone a" --owner alice --update 2>&1)
+check "update refuses rewrites"     grep -q 'failed .*history was rewritten, so these were left unchanged: wip' <<<"$OUT"
+check "rewritten branch unchanged"  test "$(git ls-remote $TOK/alice/clone-a.git refs/heads/wip 2>/dev/null | cut -f1)" = "$SERVER_WIP"
+git init -q -b main "$F/later" && git -C "$F/later" commit -q --allow-empty -m x
+OUT=$($BIN import local "$F/later" --owner alice --dry-run 2>&1)
+check "dry run reports the plan"   grep -q 'would import .*alice/later (1 branch, 0 tags)' <<<"$OUT"
+check "dry run changes nothing"     bash -c "[ \"$(db "select count(*) from repos where name='later'")\" = 0 ] && [ ! -e $OMAFORGE_DATA/repos/alice/later.git ]"
+$BIN import local "$F/later" --owner alice --public >/dev/null 2>&1
+check "--public imports public"     git clone -q $URL/alice/later.git later-clone
+refuse "unknown owner"              $BIN import local "$F/later" --owner nobody
+
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
     echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10
