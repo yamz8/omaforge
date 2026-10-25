@@ -1,0 +1,20 @@
+<div class="run-header">
+  <h1 class="page-title"><span class="ci-state {{ run.state.class }}" title="{{ run.state.label }}">{{ run.state.icon|safe }}</span> {{ run.title }} <span class="muted">#{{ run.number }}</span></h1>
+  <span class="spacer"></span>
+  {% if can_write %}
+  {% if run.completed %}
+  <form method="post" action="{{ run.url }}/rerun">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <button class="button" type="submit">{{ crate::web::icons::RERUN|safe }}Re-run</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ run.url }}/cancel">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <button class="button danger" type="submit">{{ crate::web::icons::STOPPED|safe }}Cancel run</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+<p class="run-meta muted">
+  <strong>{{ run.workflow }}</strong> · {{ run.state.label }} · triggered by {% if let Some(url) = run.pull_url %}<a href="{{ url }}">{{ run.trigger }}</a>{% else %}{{ run.trigger }}{% endif %}{% if !run.actor.is_empty() %} by {{ run.actor }}{% endif %} {{ run.ago }} · commit <a class="mono" href="{{ run.commit_url }}">{{ run.sha }}</a>{% if !run.duration.is_empty() %} · {{ run.duration }}{% endif %}
+</p>

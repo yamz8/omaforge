@@ -505,9 +505,81 @@ textarea.prose { font: 14px/1.5 var(--sans); }
 .error-page { padding: 80px 16px; text-align: center; }
 .error-page h1 { font-size: 64px; margin: 0; color: var(--dim); }
 
+
+/* ---- CI ---- */
+
+.ci-state { display: inline-flex; flex: none; }
+.ci-state.success { color: var(--green); }
+.ci-state.failure { color: var(--red); }
+.ci-state.running { color: var(--yellow); }
+.ci-state.pending, .ci-state.skipped, .ci-state.cancelled { color: var(--dim); }
+.ci-state .spin { transform-origin: 8px 8px; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ci-state .spin { animation: none; } }
+.actions-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; }
+.actions-layout .side-nav a { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.run-list, .job-list { list-style: none; margin: 0; padding: 0; }
+.run-list li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.run-list li:first-child, .job-list li:first-child { border-top: 0; }
+.run-list .ci-state { padding-top: 3px; }
+.run-list .summary { flex: 1; min-width: 0; }
+.run-list .subject { color: var(--strong); font-weight: 600; overflow-wrap: anywhere; }
+.run-list .meta { font-size: 13px; color: var(--dim); }
+.run-times { font-size: 13px; text-align: right; white-space: nowrap; }
+.job-list li { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; }
+.job-list .subject { color: var(--strong); font-weight: 600; }
+.pager { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
+.run-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.run-header .page-title { display: flex; align-items: center; gap: 10px; margin: 0; overflow-wrap: anywhere; }
+.run-header .page-title svg.icon { width: 22px; height: 22px; }
+.run-meta { margin: 6px 0 20px; font-size: 14px; }
+.workflow-error { margin: 8px 0 0; white-space: pre-wrap; color: var(--fg); }
+.job-box .box-header { gap: 10px; }
+details.step { border-top: 1px solid var(--line); }
+.job-box .box-header + details.step { border-top: 0; }
+details.step > summary {
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  cursor: pointer; list-style: none; font-size: 14px;
+}
+details.step > summary::-webkit-details-marker { display: none; }
+details.step > summary:hover { background: var(--panel); }
+details.step[open] > summary { color: var(--strong); }
+.step-name { overflow-wrap: anywhere; }
+pre.log {
+  margin: 0; padding: 8px 0 12px; background: var(--panel); color: var(--fg);
+  font-size: 12.5px; line-height: 1.5; overflow-x: auto; counter-reset: line;
+}
+pre.log:empty { display: none; }
+pre.log .line { display: block; padding: 0 16px 0 64px; position: relative; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.5em; }
+pre.log .line::before {
+  counter-increment: line; content: counter(line);
+  position: absolute; left: 0; width: 48px; text-align: right; color: var(--dim); user-select: none;
+}
+pre.log .line.group { color: var(--strong); font-weight: 600; }
+pre.log .line.error { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+pre.log .line.warning { color: var(--yellow); }
+pre.command { margin: 12px 0 8px; padding: 10px 12px; background: var(--panel); border-radius: 6px; overflow-x: auto; }
+.runner-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--dim); }
+.runner-dot.online { background: var(--green); }
+.checks-box { margin-bottom: 16px; }
+.checks-box.success { border-left: 4px solid var(--green); }
+.checks-box.failure { border-left: 4px solid var(--red); }
+.checks-box.pending { border-left: 4px solid var(--yellow); }
+.checks-box summary { display: flex; align-items: center; gap: 10px; padding: 12px 16px; cursor: pointer; list-style: none; font-size: 14px; }
+.checks-box summary::-webkit-details-marker { display: none; }
+.checks-box summary strong { color: var(--strong); }
+.check-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.check-list li { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 14px; border-top: 1px solid var(--line); }
+.check-list li:first-child { border-top: 0; }
+.check-list .check-name { color: var(--strong); font-weight: 600; overflow-wrap: anywhere; }
+.check-list .check-description { color: var(--dim); overflow-wrap: anywhere; min-width: 0; }
+.commit-checks { display: inline-flex; vertical-align: text-bottom; }
+
 @media (max-width: 640px) {
   .box-body { padding: 16px; }
   .settings { grid-template-columns: 1fr; gap: 16px; }
+  .actions-layout { grid-template-columns: 1fr; gap: 16px; }
+  .run-times { display: none; }
   .side-nav { grid-auto-flow: column; justify-content: start; overflow-x: auto; }
   .inline-form { grid-template-columns: 1fr; }
   .issue-layout { grid-template-columns: 1fr; }

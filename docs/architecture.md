@@ -30,7 +30,9 @@ and optionally staying in sync with GitHub.
 | git transport | Smart HTTP (`git-upload-pack`/`git-receive-pack --stateless-rpc`); SSH server that dispatches to the same | axum, russh |
 | db | Users, orgs, repos metadata, issues, PRs, reviews, CI runs, sync mappings | sqlx + SQLite (Postgres later) |
 | jobs | Durable queue in the DB: webhooks, sync, CI dispatch, agent tasks, indexing | tokio tasks over a `jobs` table |
-| CI | Parses GitHub Actions YAML (a subset that grows over time); a separate `omaforge-runner` runs jobs in podman/docker containers | serde_yaml, bollard |
+| `forge-ci` | Workflow files (a GitHub Actions subset that grows over time), `${{ }}` expressions, GitHub's filter globs, and the runner protocol; shared by the server and the runner | yaml-rust2 |
+| CI (in `omaforge`) | Starts runs for push and pull request events, queues jobs (`needs`, matrix, fail-fast), hands them to runners, stores step logs, reports checks | |
+| `omaforge-runner` (bin) | Claims jobs over HTTP with a runner token, runs each step on the host or in a Docker container, streams logs back; checks out code itself with a per-job token | reqwest, the `docker` CLI |
 | api | GitHub-compatible REST (`/api/v3`) and GraphQL (`/api/graphql`) subset for `gh` and scripts; shares merge/permission logic with the web through `actions` | async-graphql |
 | GitHub bridge | One-time import and continuous two-way sync | octocrab |
 | agents | Bot users driven by the Claude API: PR review, issue triage, "fix this" tasks | reqwest |
@@ -43,7 +45,34 @@ browser ──HTTP──▶ axum ─┬─ HTML views ──▶ forge-git / db
                         └─ /{owner}/{repo}.git/* ──▶ git upload-pack / receive-pack
 ssh client ──SSH──▶ russh ──auth (keys in db)──▶ git upload-pack / receive-pack
 receive-pack ──pre-receive hook──▶ branch protection (refuse with a reason)
-             ──post-receive hook──▶ events → deliveries queue → webhook worker
+             ──post-receive hook──▶ events ─┬─▶ deliveries queue → webhook worker
+                                            └─▶ CI: workflow runs → queued jobs
+omaforge-runner ──long poll /api/runner/v1/claim──▶ a job + a job token
+                ──job token──▶ clone, step updates, logs, finish → next jobs, checks
+```
+
+### CI
+
+A push or pull request event reads the workflow files at that commit, matches each one's
+`on:` against the event (path filters compare against the push's `before`, a new branch's
+merge base with the default branch, or a pull request's merge base), and records a run
+with one job per matrix combination. Jobs that need nothing are queued; the rest wait,
+and when their needs finish their `if:` (default `success()`) queues or skips them.
+
+Runners authenticate with a runner token (`omr_…`, stored hashed) and long-poll for a
+queued job whose `runs-on` labels they all have. Each claimed job gets its own token
+(`omj_…`), valid only while it runs, which lets the runner report on that job and clone
+that one repository; nothing else. The runner evaluates steps itself (expressions, env,
+`if:`), so the server only needs the workflow, the event payload and the results of
+needed jobs. Logs are stored per step under `<data>/ci/logs/`. A runner that stops
+heartbeating has its job failed by a reaper.
+
+A runner label says where its jobs run: `NAME=host` runs steps directly on the runner's
+machine, `NAME=docker://IMAGE` in a container (one per job, with the workspace mounted;
+a workflow's `container:` picks the image but can't add Docker options). Checkout always
+happens on the runner's side, so images don't need git.
+
+```text
 ```
 
 ## GitHub migration and sync
@@ -85,4 +114,5 @@ later.
 `users`, `ssh_keys`, `tokens`, `orgs`, `org_members`, `repos`, `collaborators`,
 `issues` (shared by issues and PRs, numbered per repo like GitHub), `pull_requests`,
 `comments`, `reviews`, `review_comments`, `labels`, `issue_labels`, `webhooks`,
-`jobs`, `ci_runs`, `ci_jobs`, `ci_steps`, `sync_configs`, `sync_links`.
+`deliveries`, `branch_rules`, `runners`, `workflow_runs`, `ci_jobs`, `ci_steps`,
+`commit_statuses`, `sync_configs`, `sync_links`.

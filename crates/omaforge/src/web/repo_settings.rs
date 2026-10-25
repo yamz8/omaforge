@@ -55,6 +55,8 @@ const WEBHOOK_EVENTS: &[(&str, &str)] = &[
     ("issue_comment", "Comments"),
     ("create", "Branch or tag created"),
     ("delete", "Branch or tag deleted"),
+    ("workflow_run", "Workflow runs"),
+    ("status", "Commit statuses"),
 ];
 
 #[derive(Template)]
@@ -127,6 +129,9 @@ async fn settings_page(
                     "{n} approving review{}",
                     if n == 1 { "" } else { "s" }
                 ));
+            }
+            if r.require_checks {
+                parts.push("checks must pass".to_owned());
             }
             if r.block_force_push {
                 parts.push("no force pushes".to_owned());
@@ -321,7 +326,10 @@ pub async fn delete(
         let error = format!("Type {full_name} to confirm. Nothing was deleted.");
         return settings_page(&state, &repo, None, Some(error)).await;
     }
+    // The database forgets the repository's CI jobs; their logs go with them.
+    let jobs = db::repo_job_ids(&state.db, repo.repo.id).await?;
     db::destroy_repo(&state.db, &state.repos, &repo.repo).await?;
+    crate::ci::logs::remove(&state, &jobs).await;
     tracing::info!(repo = %full_name, by = ?repo.viewer.user.as_ref().map(|u| &u.username), "deleted repository");
     Ok(Redirect::to(&format!("/{}", repo.repo.owner_name)).into_response())
 }
@@ -337,6 +345,7 @@ pub struct RuleForm {
     required_approvals: i64,
     block_force_push: Option<String>,
     block_deletion: Option<String>,
+    require_checks: Option<String>,
 }
 
 pub async fn add_rule(
@@ -363,6 +372,7 @@ pub async fn add_rule(
                 required_approvals: form.required_approvals,
                 block_force_push: form.block_force_push.is_some(),
                 block_deletion: form.block_deletion.is_some(),
+                require_checks: form.require_checks.is_some(),
             },
         )
         .await

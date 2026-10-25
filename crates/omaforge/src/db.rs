@@ -1,8 +1,10 @@
+mod ci;
 mod issues;
 mod protection;
 mod pulls;
 mod webhooks;
 
+pub use ci::*;
 pub use issues::*;
 pub use protection::*;
 pub use pulls::*;

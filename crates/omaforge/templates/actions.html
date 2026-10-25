@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Actions · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<div class="actions-layout">
+  <nav class="side-nav">
+    <a href="{{ all_url }}"{% if !filtered %} class="active"{% endif %}>All workflows</a>
+    {% for w in workflows %}<a href="{{ w.url }}"{% if w.active %} class="active"{% endif %}>{{ w.name }}</a>{% endfor %}
+  </nav>
+  <div>
+    <div class="box">
+      <div class="box-header"><strong>{{ total }} workflow run{% if total != 1 %}s{% endif %}</strong></div>
+      {% if runs.is_empty() %}
+      <div class="empty-state">
+        No workflow runs yet.
+        <p class="muted">Add a workflow file in <code>.omaforge/workflows/</code> or <code>.github/workflows/</code>, then push. Jobs run on <code>omaforge-runner</code>.</p>
+      </div>
+      {% else %}
+      <ul class="run-list">
+        {% for r in runs %}
+        <li>
+          <span class="ci-state {{ r.state.class }}" title="{{ r.state.label }}">{{ r.state.icon|safe }}</span>
+          <div class="summary">
+            <a class="subject" href="{{ r.url }}">{{ r.title }}</a>
+            <div class="meta"><strong>{{ r.workflow }}</strong> #{{ r.number }} · {{ r.trigger }}{% if !r.actor.is_empty() %} by {{ r.actor }}{% endif %}</div>
+          </div>
+          <div class="run-times muted">
+            <div>{{ r.ago }}</div>
+            {% if !r.duration.is_empty() %}<div>{{ r.duration }}</div>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% if newer.is_some() || older.is_some() %}
+    <div class="pager">
+      {% if let Some(url) = newer %}<a class="button" href="{{ url }}">Newer</a>{% endif %}
+      {% if let Some(url) = older %}<a class="button" href="{{ url }}">Older</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

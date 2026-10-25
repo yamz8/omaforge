@@ -49,6 +49,17 @@ struct SettingsPage {
     /// Values to put back in the form after an error.
     name: String,
     key: String,
+    runners: Vec<RunnerView>,
+    server_url: String,
+}
+
+struct RunnerView {
+    id: i64,
+    name: String,
+    labels: String,
+    version: String,
+    seen: String,
+    online: bool,
 }
 
 impl SettingsPage {
@@ -62,6 +73,8 @@ impl SettingsPage {
             notice: None,
             name: String::new(),
             key: String::new(),
+            runners: Vec::new(),
+            server_url: String::new(),
         }
     }
 }
@@ -182,6 +195,94 @@ pub async fn delete_token(
     viewer.check_csrf(&form.csrf)?;
     db::delete_token(&state.db, user.id, id).await?;
     Ok(Redirect::to("/settings/tokens").into_response())
+}
+
+// ---- Runners (site admins) ----
+
+/// A site admin, or a redirect to sign in / a 404 for everyone else.
+fn require_admin<'a>(viewer: &'a Viewer, here: &str) -> WebResult<&'a db::User> {
+    let user = viewer.require(here)?;
+    if user.is_admin {
+        Ok(user)
+    } else {
+        Err(super::WebError::NotFound)
+    }
+}
+
+async fn runners_page(state: &AppState, viewer: Viewer) -> WebResult<SettingsPage> {
+    let now = super::render::now();
+    let runners = db::runners(&state.db)
+        .await?
+        .into_iter()
+        .map(|r| RunnerView {
+            id: r.id,
+            labels: if r.labels.is_empty() {
+                "no labels yet".into()
+            } else {
+                r.labels.replace(',', ", ")
+            },
+            version: r.version,
+            seen: r.last_seen.map_or_else(
+                || "Never connected".to_owned(),
+                |t| format!("Last seen {}", super::render::time_ago(t)),
+            ),
+            // A waiting runner checks in at least every 30 seconds.
+            online: r.last_seen.is_some_and(|t| now - t < 90),
+            name: r.name,
+        })
+        .collect();
+    Ok(SettingsPage {
+        runners,
+        server_url: state.site.http_url.clone(),
+        ..SettingsPage::new(viewer, "runners")
+    })
+}
+
+pub async fn runners(State(state): State<AppState>, viewer: Viewer) -> WebResult {
+    require_admin(&viewer, "/settings/runners")?;
+    page(runners_page(&state, viewer).await?)
+}
+
+pub async fn create_runner(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Form(form): Form<CreateTokenForm>,
+) -> WebResult {
+    require_admin(&viewer, "/settings/runners")?;
+    viewer.check_csrf(&form.csrf)?;
+    let name = form.name.trim().to_owned();
+    let (token, hash) = crate::ci::new_runner_token()?;
+    let result = if name.is_empty() || name.len() > 100 {
+        Err(
+            "Give the runner a name of up to 100 characters, like the machine it runs on."
+                .to_owned(),
+        )
+    } else {
+        db::create_runner(&state.db, &name, &hash)
+            .await
+            .map_err(|e| format!("{e:#}"))
+    };
+    let mut view = runners_page(&state, viewer).await?;
+    match result {
+        Ok(_) => view.new_token = Some(token),
+        Err(error) => {
+            view.error = Some(error);
+            view.name = name;
+        }
+    }
+    page(view)
+}
+
+pub async fn delete_runner(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<i64>,
+    Form(form): Form<CsrfForm>,
+) -> WebResult {
+    require_admin(&viewer, "/settings/runners")?;
+    viewer.check_csrf(&form.csrf)?;
+    db::delete_runner(&state.db, id).await?;
+    Ok(Redirect::to("/settings/runners").into_response())
 }
 
 // ---- Password ----

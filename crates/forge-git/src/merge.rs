@@ -62,6 +62,26 @@ impl Repository {
         Ok(parse_commits(&out))
     }
 
+    /// Paths that differ between two commits (`from..to`), for CI's `paths` filters.
+    pub async fn changed_paths(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        let out = self
+            .run([
+                "diff",
+                "--name-only",
+                "-z",
+                "--no-renames",
+                check_id(from)?,
+                check_id(to)?,
+                "--",
+            ])
+            .await?;
+        Ok(out
+            .split(|&b| b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect())
+    }
+
     /// The changes `head` makes since it diverged from `base` (`base...head`).
     pub async fn compare_diff(&self, base: &str, head: &str) -> Result<Vec<FileDiff>> {
         Ok(diff::parse(&self.compare_patch(base, head).await?))

@@ -2,6 +2,7 @@
 <div class="box-header latest-commit">
   <strong>{{ c.author }}</strong>
   <a class="message" href="{{ c.url }}">{{ c.subject }}</a>
+  {% if let Some(k) = c.checks %}<a class="ci-state commit-checks {{ k.class }}" href="{{ k.url }}" title="{{ k.title }}">{{ k.icon|safe }}</a>{% endif %}
   <a class="sha" href="{{ c.url }}">{{ c.short_id }}</a>
   <span class="muted" title="{{ c.timestamp }}">{{ c.time_ago }}</span>
 </div>

@@ -19,6 +19,7 @@ use tower_http::decompression::RequestDecompressionLayer;
 
 use crate::{
     auth::{self, Identity},
+    db,
     git_service::{self, Decision, Service},
     AppState,
 };
@@ -177,6 +178,10 @@ async fn authorize(
     headers: &HeaderMap,
     service: Service,
 ) -> Result<git_service::Grant, Response> {
+    // A CI job may clone (only) its own repository with its job token.
+    if let Some(grant) = job_grant(state, owner, repo, headers, service).await? {
+        return Ok(grant);
+    }
     let user = match auth::authenticate(&state.db, headers).await {
         Ok(Identity::User(user)) => Some(user),
         Ok(Identity::Anonymous) => None,
@@ -193,6 +198,45 @@ async fn authorize(
             .into_response()),
         Ok(Decision::NotFound) => Err(StatusCode::NOT_FOUND.into_response()),
         Err(error) => Err(internal_error(error)),
+    }
+}
+
+/// A job token in Basic auth (as git sends it) or a Bearer header.
+#[allow(clippy::result_large_err)]
+async fn job_grant(
+    state: &AppState,
+    owner: &str,
+    repo: &str,
+    headers: &HeaderMap,
+    service: Service,
+) -> Result<Option<git_service::Grant>, Response> {
+    let Some(token) = auth::job_token(headers) else {
+        return Ok(None);
+    };
+    let not_allowed = || Err(unauthorized());
+    let job = match db::job_by_token_hash(&state.db, &auth::hash_token(&token)).await {
+        Ok(Some(job)) => job,
+        Ok(None) => return not_allowed(),
+        Err(error) => return Err(internal_error(error)),
+    };
+    let target =
+        match db::repo_by_path(&state.db, owner, repo.strip_suffix(".git").unwrap_or(repo)).await {
+            Ok(target) => target,
+            Err(error) => return Err(internal_error(error)),
+        };
+    let run = match db::run(&state.db, job.run_id).await {
+        Ok(run) => run,
+        Err(error) => return Err(internal_error(error)),
+    };
+    match (target, run) {
+        (Some(target), Some(run)) if run.repo_id == target.id && service == Service::UploadPack => {
+            Ok(Some(git_service::Grant {
+                path: forge_git::repo_path(&state.repos, &target.owner_name, &target.name),
+                repo_id: target.id,
+                user_id: None,
+            }))
+        }
+        _ => not_allowed(),
     }
 }
 

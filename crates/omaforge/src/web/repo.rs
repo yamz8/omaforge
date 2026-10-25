@@ -67,6 +67,8 @@ pub(super) struct CommitView {
     pub(super) timestamp: String,
     pub(super) url: String,
     pub(super) browse_url: String,
+    /// The commit's CI result, once looked up with `ci::add_checks`.
+    pub(super) checks: Option<super::ci::CommitChecks>,
 }
 
 /// A repository someone may view, with its git directory opened.
@@ -129,6 +131,7 @@ impl Loaded {
             timestamp: render::timestamp(commit.author_time),
             url: format!("{}/commit/{}", self.url, commit.id),
             browse_url: self.view_url("tree", &commit.id, ""),
+            checks: None,
         }
     }
 
@@ -420,12 +423,13 @@ async fn tree_page(
         None => return Err(WebError::NotFound),
     }
     let entries = repo.git.tree(commit, path).await?;
-    let latest = repo
+    let mut latest = repo
         .git
         .log(commit, path, 0, 1)
         .await?
         .first()
         .map(|c| repo.commit_view(c));
+    super::ci::add_checks(state, repo, latest.as_mut()).await?;
 
     let readme = match render::find_readme(
         entries
@@ -708,7 +712,8 @@ pub async fn commits(
     let mut groups: Vec<CommitGroup> = Vec::new();
     for commit in &history {
         let date = render::date(commit.author_time);
-        let view = repo.commit_view(commit);
+        let mut view = repo.commit_view(commit);
+        super::ci::add_checks(&state, &repo, Some(&mut view)).await?;
         match groups.last_mut() {
             Some(group) if group.date == date => group.commits.push(view),
             _ => groups.push(CommitGroup {
@@ -775,7 +780,11 @@ pub async fn commit(
     page(CommitPage {
         viewer: repo.viewer.clone(),
         repo: repo.context(&state, "commits"),
-        commit: repo.commit_view(&commit),
+        commit: {
+            let mut view = repo.commit_view(&commit);
+            super::ci::add_checks(&state, &repo, Some(&mut view)).await?;
+            view
+        },
         body: commit.body.clone(),
         committer: (commit.committer_name != commit.author_name)
             .then(|| commit.committer_name.clone()),

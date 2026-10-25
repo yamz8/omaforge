@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ run.title }} · {{ run.workflow }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+{% include "run_header.html" %}
+{% if let Some(error) = error %}
+<div class="flash error">
+  <strong>The workflow file is invalid</strong> (<a href="{{ workflow_url }}">view it</a>):
+  <pre class="workflow-error">{{ error }}</pre>
+</div>
+{% endif %}
+{% if !jobs.is_empty() %}
+<div class="box">
+  <div class="box-header"><strong>Jobs</strong></div>
+  <ul class="job-list">
+    {% for j in jobs %}
+    <li>
+      <span class="ci-state {{ j.state.class }}" title="{{ j.state.label }}">{{ j.state.icon|safe }}</span>
+      <a class="subject" href="{{ j.url }}">{{ j.name }}</a>
+      {% if !j.needs.is_empty() %}<span class="muted">needs {{ j.needs }}</span>{% endif %}
+      <span class="spacer"></span>
+      <span class="muted">{% if j.duration.is_empty() %}{{ j.state.label }}{% else %}{{ j.duration }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% if !run.completed %}<script src="{{ crate::web::live_script_url() }}" data-reload="5000" defer></script>{% endif %}
+{% endblock %}

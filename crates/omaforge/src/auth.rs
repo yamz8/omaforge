@@ -112,6 +112,18 @@ pub async fn authenticate(db: &SqlitePool, headers: &HeaderMap) -> Result<Identi
     Ok(user.map_or(Identity::Invalid, Identity::User))
 }
 
+/// A CI job token (`omj_...`) sent as a Bearer token or a Basic password.
+pub fn job_token(headers: &HeaderMap) -> Option<String> {
+    let bytes = headers.get(header::AUTHORIZATION)?.as_bytes();
+    let token = match bytes.strip_prefix(b"Bearer ") {
+        Some(token) => String::from_utf8_lossy(token).trim().to_owned(),
+        None => parse_basic(bytes)?.1,
+    };
+    token
+        .starts_with(forge_ci::protocol::JOB_TOKEN_PREFIX)
+        .then_some(token)
+}
+
 fn parse_basic(value: &[u8]) -> Option<(String, String)> {
     let encoded = value.strip_prefix(b"Basic ")?;
     let decoded = base64::engine::general_purpose::STANDARD

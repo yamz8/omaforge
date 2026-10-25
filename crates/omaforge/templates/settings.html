@@ -6,6 +6,7 @@
     <a href="/settings/keys"{% if section == "keys" %} class="active"{% endif %}>SSH keys</a>
     <a href="/settings/tokens"{% if section == "tokens" %} class="active"{% endif %}>Access tokens</a>
     <a href="/settings/password"{% if section == "password" %} class="active"{% endif %}>Password</a>
+    {% if let Some(user) = viewer.user %}{% if user.is_admin %}<a href="/settings/runners"{% if section == "runners" %} class="active"{% endif %}>CI runners</a>{% endif %}{% endif %}
   </nav>
   <div class="settings-body">
     {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
@@ -42,6 +43,49 @@
       <label>Public key<textarea name="key" rows="4" placeholder="ssh-ed25519 AAAA… you@laptop" required>{{ key }}</textarea></label>
       <p class="muted small">Paste the contents of <code>~/.ssh/id_ed25519.pub</code>.</p>
       <button class="button primary" type="submit">Add SSH key</button>
+    </form>
+
+    {% else if section == "runners" %}
+    <h1 class="page-title">CI runners</h1>
+    <p class="muted">Machines that run workflow jobs for every repository here. Only site admins see this page.</p>
+    {% if let Some(token) = new_token %}
+    <div class="box new-token">
+      <div class="box-body">
+        <p><strong>Copy the runner token now.</strong> You won't be able to see it again. Start the runner with it:</p>
+        <input class="mono" readonly value="{{ token }}" onclick="this.select()">
+        <pre class="command">export OMAFORGE_RUNNER_TOKEN={{ token }}
+omaforge-runner --server {{ server_url }} --label ubuntu-latest=docker://ubuntu:24.04</pre>
+        <p class="muted small"><code>--label NAME=host</code> runs that label's jobs directly on the machine instead of in a container. Those jobs aren't isolated from the runner (they could read its token), so only use it if you trust everyone who can push workflows.</p>
+      </div>
+    </div>
+    {% endif %}
+    <div class="box">
+      {% if runners.is_empty() %}
+      <div class="empty-state">No runners yet. Add one below, then start <code>omaforge-runner</code> with its token.</div>
+      {% else %}
+      <ul class="credential-list">
+        {% for r in runners %}
+        <li>
+          <span class="runner-dot{% if r.online %} online{% endif %}" title="{% if r.online %}Online{% else %}Offline{% endif %}"></span>
+          <div class="summary">
+            <strong>{{ r.name }}</strong>
+            <div class="mono muted">{{ r.labels }}</div>
+            <div class="meta">{% if r.online %}Online{% else %}Offline{% endif %} · {{ r.seen }}{% if !r.version.is_empty() %} · omaforge-runner {{ r.version }}{% endif %}</div>
+          </div>
+          <form method="post" action="/settings/runners/{{ r.id }}/delete">
+            <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+            <button class="button danger" type="submit">Remove</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    <h2>Add a runner</h2>
+    <form class="box form" method="post" action="/settings/runners">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <label>Name<input name="name" value="{{ name }}" placeholder="build-box" required></label>
+      <button class="button primary" type="submit">Create runner token</button>
     </form>
 
     {% else if section == "tokens" %}

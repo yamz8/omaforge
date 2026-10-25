@@ -20,6 +20,7 @@
           <a class="subject" href="{{ c.url }}">{{ c.subject }}</a>
           <div class="meta"><strong>{{ c.author }}</strong> committed <span title="{{ c.timestamp }}">{{ c.time_ago }}</span></div>
         </div>
+        {% if let Some(k) = c.checks %}<a class="ci-state commit-checks {{ k.class }}" href="{{ k.url }}" title="{{ k.title }}">{{ k.icon|safe }}</a>{% endif %}
         <span class="sha-cell"><a class="sha" href="{{ c.url }}">{{ c.short_id }}</a></span>
         <a class="button" href="{{ c.browse_url }}" title="Browse files at this commit">{{ crate::web::icons::CODE|safe }}</a>
       </li>

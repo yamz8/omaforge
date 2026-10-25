@@ -60,6 +60,8 @@ check "add bob's SSH key from stdin" bash -c "$BIN admin add-ssh-key bob desktop
 refuse "same key twice"              $BIN admin add-ssh-key bob again --key-file "$W/alice.pub"
 refuse "garbage key"                 bash -c "echo 'ssh-ed25519 notakey' | $BIN admin add-ssh-key bob junk"
 
+# CI fails jobs whose runner goes quiet; shorten that so the test can see it happen.
+export OMAFORGE_RUNNER_TIMEOUT=12
 start_server
 trap 'kill $SERVER 2>/dev/null' EXIT
 
@@ -576,6 +578,200 @@ DID=$(db "select min(d.id) from deliveries d join webhooks w on w.id = d.webhook
 post $A /alice/guarded/settings/deliveries/$DID/redeliver csrf=$(csrf $A /alice/guarded/settings) >/dev/null
 check "redeliver"                   bash -c "for _ in \$(seq 50); do [ \$(grep -c '\"event\": \"ping\"' $HOOK_LOG) -ge 2 ] && exit 0; sleep 0.1; done; exit 1"
 check "bob can't add webhooks"      test "$(post $B /alice/guarded/settings/webhooks csrf=$(csrf $B /settings/keys) url=http://x.example event=push | cut -d' ' -f1)" = 404
+
+echo "== CI"
+RUNNER_BIN=${OMAFORGE_RUNNER_BIN:-$ROOT/target/debug/omaforge-runner}
+$BIN admin create-repo alice/ci --private >/dev/null
+CIR=http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/ci.git
+RUNNER_TOKEN=$($BIN admin create-runner builder)
+check "create runner (CLI)"         bash -c "echo '$RUNNER_TOKEN' | grep -q '^omr_'"
+refuse "same runner name twice"     $BIN admin create-runner builder
+start_runner() {
+    $RUNNER_BIN --server $URL --token $RUNNER_TOKEN --label ubuntu-latest=host --label self-hosted=host --work $W/runner-work >>"$W/runner.log" 2>&1 &
+    RUNNER=$!
+}
+start_runner
+trap 'kill $SERVER $PROXY $RECEIVER $RUNNER 2>/dev/null' EXIT
+refuse "runner with a bad token"    timeout 5 $RUNNER_BIN --server $URL --token omr_nope --label x=host --once
+# wait_run <sql condition>: print the newest matching run once it has completed (60 s).
+wait_run() { for _ in $(seq 300); do local id; id=$(db "select id from workflow_runs where $1 and status = 'completed' order by id desc limit 1"); [ -n "$id" ] && { echo $id; return 0; }; sleep 0.2; done; return 1; }
+job_id() { db "select id from ci_jobs where run_id = $1 and name = '$2'"; }
+job_log() { cat $OMAFORGE_DATA/ci/logs/$1/*.log; }
+export -f wait_run job_id job_log
+CS=$(csrf $A /alice/ci/settings)
+post $A /alice/ci/settings/webhooks csrf=$CS url=http://127.0.0.1:$HOOK_PORT/ci secret=s3cret event=workflow_run >/dev/null
+
+git init -q -b main ci-src && cd ci-src
+mkdir -p .github/workflows .omaforge/workflows sub docs
+echo "# CI test" >README.md; echo keep >sub/.keep; echo "Docs" >docs/index.md
+cat >.github/workflows/ci.yml <<'EOF'
+name: CI
+on:
+  push:
+  pull_request:
+env:
+  GREETING: hello
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        n: [1, 2]
+    outputs:
+      answer: ${{ steps.calc.outputs.answer }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: test -f README.md && echo "$GREETING n=${{ matrix.n }} on $GITHUB_REF_NAME ($GITHUB_EVENT_NAME)"
+      - id: calc
+        run: echo "answer=4${{ matrix.n }}" >> "$GITHUB_OUTPUT"
+      - run: echo "::add-mask::hunter2" && echo "password is hunter2"
+      - name: Set env and path for later steps
+        run: |
+          echo "FROM_STEP=yes" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tools" && printf '#!/bin/sh\necho tool ran\n' > "$RUNNER_TEMP/tools/mytool" && chmod +x "$RUNNER_TEMP/tools/mytool"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+      - run: test "$FROM_STEP" = yes && mytool
+      - run: pwd | grep -q '/sub$'
+        working-directory: sub
+      - run: exit 1
+        continue-on-error: true
+  report:
+    needs: build
+    runs-on: [self-hosted]
+    if: github.event_name == 'push'
+    steps:
+      - run: echo "answer=${{ needs.build.outputs.answer }} result=${{ needs.build.result }}"
+EOF
+cat >.omaforge/workflows/docs.yml <<'EOF'
+name: Docs
+on:
+  push:
+    paths: ['docs/**']
+jobs:
+  docs:
+    runs-on: self-hosted
+    steps:
+      - run: echo building docs
+EOF
+git add -A && git commit -qm "Add CI" && git push -q $CIR main
+cd ..
+CI1=$(wait_run "workflow_name = 'CI' and git_ref = 'refs/heads/main'")
+check "push starts a run"           test -n "$CI1"
+check "run succeeded"               test "$(db "select conclusion from workflow_runs where id = $CI1")" = success
+check "matrix expanded"             test "$(db "select group_concat(name, ',') from ci_jobs where run_id = $CI1")" = "build (1),build (2),report"
+B1=$(job_id $CI1 'build (1)')
+check "private repo checked out"    bash -c "job_log $B1 | grep -q 'hello n=1 on main (push)'"
+check "add-mask hides secrets"      bash -c "job_log $B1 | grep -qx 'password is \*\*\*' && ! job_log $B1 | grep -qx 'password is hunter2'"
+check "GITHUB_ENV and GITHUB_PATH"  bash -c "job_log $B1 | grep -q 'tool ran'"
+check "continue-on-error"           test "$(db "select group_concat(conclusion) from ci_steps where job_id = $B1")" = "success,success,success,success,success,success,success,success,success,success"
+check "needs passes outputs"        bash -c "job_log $(job_id $CI1 report) | grep -qE 'answer=4[12] result=success'"
+check "paths filter (docs)"         bash -c "db \"select workflow_name from workflow_runs where head_sha = '$(git -C ci-src rev-parse HEAD)'\" | grep -q Docs"
+(cd ci-src && echo more >>README.md && git commit -qam "Only the readme" && git push -q $CIR main)
+CI2=$(wait_run "title = 'Only the readme'")
+check "paths filter skips"          test "$(db "select count(*) from workflow_runs where title = 'Only the readme' and workflow_name = 'Docs'")" = 0
+refuse "bogus job token can't clone" git clone -q http://x:omj_bogus@127.0.0.1:$PORT/alice/ci.git bogus-clone
+check "finished job token revoked"  test "$(db "select count(*) from ci_jobs where token_hash is not null and status = 'completed'")" = 0
+check "actions page lists runs"     bash -c "curl -s -b $A $URL/alice/ci/actions | grep -q 'Only the readme' && curl -s -b $A $URL/alice/ci/actions | grep -q 'push to main'"
+check "actions page private"        test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/ci/actions)" = 404
+check "job page shows masked log"   bash -c "curl -s -b $A $URL/alice/ci/actions/runs/$CI1/jobs/$B1 | grep -q 'password is \*\*\*'"
+check "raw log"                     bash -c "curl -s -b $A $URL/alice/ci/actions/runs/$CI1/jobs/$B1/logs | grep -q '##\[group\]Run actions/checkout@v4'"
+check "live endpoint"               bash -c "curl -s -b $A '$URL/alice/ci/actions/runs/$CI1/jobs/$B1/live?o=0' | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"done\"] and d[\"steps\"][0][\"class\"]==\"success\"'"
+check "commit shows checks"         bash -c "curl -s -b $A $URL/alice/ci/commits/main | grep -q 'ci-state commit-checks success'"
+check "workflow_run webhook"        wait_for "r['event']=='workflow_run' and r['payload']['action']=='completed' and r['payload']['workflow_run']['conclusion']=='success' and r['path']=='/ci'"
+
+# A failing branch, a pull request from it, and required checks.
+(cd ci-src && git checkout -q -b failing && cat >>.github/workflows/ci.yml <<'EOF'
+  lint:
+    runs-on: self-hosted
+    steps:
+      - run: echo "linting" && exit 3
+      - if: failure()
+        run: echo "cleaning up after failure"
+      - run: echo "never runs"
+EOF
+git commit -qam "Add a failing lint" && git push -q $CIR failing)
+CI3=$(wait_run "workflow_name = 'CI' and title = 'Add a failing lint' and event = 'push'")
+check "new branch paths filter"     test "$(db "select count(*) from workflow_runs where workflow_name = 'Docs' and title = 'Add a failing lint'")" = 0
+check "failing run"                 test "$(db "select conclusion from workflow_runs where id = $CI3")" = failure
+L3=$(job_id $CI3 lint)
+check "if: failure() step runs"     test "$(db "select group_concat(conclusion) from ci_steps where job_id = $L3")" = "success,failure,success,skipped,success"
+check "exit code logged"            bash -c "job_log $L3 | grep -q 'Process completed with exit code 3'"
+post $A /alice/ci/settings/branches csrf=$CS pattern=main require_checks=on >/dev/null
+check "required checks rule"        bash -c "curl -s -b $A $URL/alice/ci/settings | grep -q 'checks must pass'"
+PRF=$(post $A /alice/ci/pulls csrf=$(csrf $A "/alice/ci/compare?base=main&head=failing") base=main head=failing "title=Failing lint" | grep -o '[0-9]*$')
+CI4=$(wait_run "event = 'pull_request' and pull_number = $PRF")
+check "pull_request run"            test -n "$CI4"
+check "PR shows failed checks"      bash -c "curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q 'checks-box failure' && curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q 'CI / lint'"
+check "if: on event skips job"      test "$(db "select conclusion from ci_jobs where run_id = $CI4 and job_key = 'report'")" = skipped
+check "failed checks block merge"   bash -c "curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q 'checks must pass, and some failed'"
+post $A /alice/ci/pull/$PRF/merge csrf=$(csrf $A /alice/ci/pull/$PRF) method=merge >/dev/null
+check "merge refused"               test "$(db "select state from issues where number = $PRF and repo_id = (select id from repos where name = 'ci')")" = open
+(cd ci-src && git checkout -q main && git checkout -q -b green && echo green >green.txt && git add green.txt && git commit -qm "Green change" && git push -q $CIR green)
+PRG=$(post $A /alice/ci/pulls csrf=$(csrf $A "/alice/ci/compare?base=main&head=green") base=main head=green "title=Green change" | grep -o '[0-9]*$')
+wait_run "event = 'pull_request' and pull_number = $PRG" >/dev/null
+check "passing checks allow merge"  bash -c "curl -s -b $A $URL/alice/ci/pull/$PRG | grep -q 'All checks have passed' && [ \"\$(post $A /alice/ci/pull/$PRG/merge csrf=\$(csrf $A /alice/ci/pull/$PRG) method=merge | cut -d' ' -f1)\" = 303 ] && [ \"\$(db \"select state from issues where number = $PRG and repo_id = (select id from repos where name = 'ci')\")\" = closed ]"
+
+# Statuses from another CI system.
+SHA_F=$(git -C ci-src rev-parse failing)
+check "post a commit status"        bash -c "curl -sf -H 'Authorization: token $WEB_TOKEN' -d '{\"state\":\"success\",\"context\":\"lint/external\",\"description\":\"Looks good\",\"target_url\":\"https://ci.example.com/1\"}' $URL/api/v3/repos/alice/ci/statuses/$SHA_F | grep -q '\"context\":\"lint/external\"'"
+check "status on the pull request"  bash -c "curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q 'lint/external'"
+check "combined status"             bash -c "curl -s -H 'Authorization: token $WEB_TOKEN' $URL/api/v3/repos/alice/ci/commits/failing/status | grep -q '\"state\":\"success\"'"
+BOB_TOKEN=${BOB_TOKEN:-$($BIN admin create-token bob ci)}
+$BIN admin add-collaborator alice/ci bob --role read >/dev/null
+refuse "status needs write access"  curl -sf -H "Authorization: token $BOB_TOKEN" -d '{"state":"success"}' $URL/api/v3/repos/alice/ci/statuses/$SHA_F
+check "javascript: link dropped"    bash -c "curl -sf -H 'Authorization: token $WEB_TOKEN' -d '{\"state\":\"failure\",\"context\":\"evil\",\"target_url\":\"javascript:alert(1)\"}' $URL/api/v3/repos/alice/ci/statuses/$SHA_F >/dev/null && curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q '>evil<' && ! curl -s -b $A $URL/alice/ci/pull/$PRF | grep -q 'javascript:'"
+
+# Cancelling, re-running, and a runner that disappears.
+(cd ci-src && git checkout -q main && git pull -q $CIR main && git checkout -q -b slow && cat >.omaforge/workflows/slow.yml <<'EOF'
+name: Slow
+on: push
+jobs:
+  wait:
+    runs-on: self-hosted
+    steps:
+      - name: Wait
+        run: for i in $(seq 1 120); do echo "tick $i"; sleep 0.5; done
+EOF
+git add -A && git commit -qm "Slow job" && git push -q $CIR slow)
+running() { for _ in $(seq 150); do [ "$(db "select count(*) from ci_steps s join ci_jobs j on j.id = s.job_id join workflow_runs w on w.id = j.run_id where w.workflow_name = 'Slow' and w.status != 'completed' and s.number = 1 and s.status = 'in_progress'")" = 1 ] && return 0; sleep 0.2; done; return 1; }
+check "slow job starts"             running
+SLOW=$(db "select max(id) from workflow_runs where workflow_name = 'Slow'")
+post $A /alice/ci/actions/runs/$SLOW/cancel csrf=$(csrf $A /alice/ci/actions/runs/$SLOW) >/dev/null
+check "cancel a run"                bash -c "wait_run 'id = $SLOW' >/dev/null && [ \"\$(db 'select conclusion from workflow_runs where id = $SLOW')\" = cancelled ] && job_log \$(job_id $SLOW wait) | grep -q 'The job was cancelled'"
+R=$(post $A /alice/ci/actions/runs/$SLOW/rerun csrf=$(csrf $A /alice/ci/actions/runs/$SLOW))
+check "re-run"                      bash -c "echo '$R' | grep -q '^303 .*/actions/runs/' && [ \"\$(db \"select count(*) from workflow_runs where workflow_name = 'Slow'\")\" = 2 ]"
+check "re-run starts"               running
+kill -9 $RUNNER; wait $RUNNER 2>/dev/null
+STUCK=$(db "select max(id) from workflow_runs where workflow_name = 'Slow'")
+check "silent runner's job fails"   bash -c "for _ in \$(seq 150); do [ \"\$(db 'select conclusion from workflow_runs where id = $STUCK')\" = failure ] && job_log \$(job_id $STUCK wait) | grep -q 'runner stopped responding' && exit 0; sleep 0.2; done; exit 1"
+start_runner
+
+# Mistakes in workflow files show up as failed runs.
+(cd ci-src && git checkout -q main && git checkout -q -b broken && printf 'on: push\njobs:\n  a:\n    runs-on: self-hosted\n    needs: nope\n    steps:\n      - run: true\n' >.omaforge/workflows/broken.yml && git add -A && git commit -qm "Broken workflow" && git push -q $CIR broken)
+BROKEN=$(wait_run "workflow_path = '.omaforge/workflows/broken.yml'")
+check "invalid workflow reported"   bash -c "curl -s -b $A $URL/alice/ci/actions/runs/$BROKEN | grep -q 'needs .*nope.*, which doesn' && [ \"\$(db 'select conclusion from workflow_runs where id = $BROKEN')\" = failure ]"
+
+# Runners in the admin settings.
+check "runners page (admin)"        bash -c "curl -s -b $A $URL/settings/runners | grep -q 'builder' && curl -s -b $A $URL/settings/runners | grep -q 'runner-dot online'"
+check "runners page hidden"         test "$(curl -s -o /dev/null -w '%{http_code}' -b $B $URL/settings/runners)" = 404
+R=$(post $A /settings/runners csrf=$(csrf $A /settings/runners) name=second-box)
+check "create runner (web)"         bash -c "grep -q 'omr_[0-9a-f]\{64\}' $W/post.html && grep -q 'omaforge-runner --server' $W/post.html"
+
+if command -v gh >/dev/null && [ -n "${PROXY:-}" ]; then
+    GCI="-R localhost:$TLS_PORT/alice/ci"
+    check "gh run list"             bash -c "ALICE_GH run list $GCI | grep -q 'Only the readme'"
+    check "gh run view"             bash -c "ALICE_GH run view $CI3 $GCI | grep -q 'lint'"
+    check "gh run view --log-failed" bash -c "ALICE_GH run view $CI3 $GCI --log-failed | grep -q 'exit code 3'"
+    check "gh pr checks"            bash -c "ALICE_GH pr checks $PRF $GCI | grep -qE '^lint\s+fail' && ALICE_GH pr checks $PRF $GCI | grep -qE 'lint/external\s+pass'"
+    check "gh run rerun"            bash -c "ALICE_GH run rerun $CI3 $GCI && [ \"\$(db \"select count(*) from workflow_runs where workflow_name = 'CI' and title = 'Add a failing lint' and event = 'push'\")\" = 2 ]"
+fi
+
+# Deleting a repository deletes its CI logs too (after its runs are done).
+wait_run "id = (select max(id) from workflow_runs)" >/dev/null
+for _ in $(seq 150); do [ "$(db "select count(*) from workflow_runs where status != 'completed'")" = 0 ] && break; sleep 0.2; done
+CI_LOGS=$(db "select group_concat(j.id, ' ') from ci_jobs j join workflow_runs w on w.id = j.run_id where w.repo_id = (select id from repos where name = 'ci')")
+post $A /alice/ci/settings/delete csrf=$(csrf $A /alice/ci/settings) confirm=alice/ci >/dev/null
+check "repo deletion removes logs"  bash -c "[ -n '$CI_LOGS' ] && for j in $CI_LOGS; do [ ! -e $OMAFORGE_DATA/ci/logs/\$j ] || exit 1; done && [ \"\$(db 'select count(*) from workflow_runs')\" = 0 ]"
 
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then

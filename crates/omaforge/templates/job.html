@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ job.name }} · {{ run.workflow }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+{% include "run_header.html" %}
+<div class="actions-layout">
+  <nav class="side-nav jobs-nav">
+    <a href="{{ run.url }}">Summary</a>
+    {% for j in jobs %}<a href="{{ j.url }}"{% if j.id == job.id %} class="active"{% endif %}><span class="ci-state {{ j.state.class }}">{{ j.state.icon|safe }}</span>{{ j.name }}</a>{% endfor %}
+  </nav>
+  <div class="box job-box" id="job"{% if live %} data-live="{{ live_url }}"{% endif %}>
+    <div class="box-header">
+      <span class="ci-state {{ job.state.class }}" data-job-state title="{{ job.state.label }}">{{ job.state.icon|safe }}</span>
+      <strong>{{ job.name }}</strong>
+      <span class="muted">{% if let Some(r) = runner %}on {{ r }}{% else %}runs on {{ labels }}{% endif %}</span>
+      <span class="spacer"></span>
+      <a class="button" href="{{ log_url }}">Raw log</a>
+    </div>
+    {% for s in steps %}
+    <details class="step" data-step="{{ s.number }}" data-offset="{{ s.offset }}"{% if s.open %} open{% endif %}>
+      <summary>
+        <span class="ci-state {{ s.state.class }}" title="{{ s.state.label }}">{{ s.state.icon|safe }}</span>
+        <span class="step-name">{{ s.name }}</span>
+        <span class="spacer"></span>
+        <span class="muted step-duration">{{ s.duration }}</span>
+      </summary>
+      <pre class="log">{% for l in s.lines %}<span class="line {{ l.class }}">{{ l.text }}</span>{% endfor %}</pre>
+    </details>
+    {% endfor %}
+  </div>
+</div>
+{% if live %}<script src="{{ crate::web::live_script_url() }}" defer></script>{% endif %}
+{% endblock %}

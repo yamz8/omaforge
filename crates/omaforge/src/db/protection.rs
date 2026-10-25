@@ -11,11 +11,12 @@ pub struct BranchRule {
     pub required_approvals: i64,
     pub block_force_push: bool,
     pub block_deletion: bool,
+    pub require_checks: bool,
 }
 
 pub async fn branch_rules(db: &SqlitePool, repo_id: i64) -> Result<Vec<BranchRule>> {
     let rules = sqlx::query_as(
-        "SELECT id, pattern, require_pull_request, required_approvals, block_force_push, block_deletion
+        "SELECT id, pattern, require_pull_request, required_approvals, block_force_push, block_deletion, require_checks
          FROM branch_rules WHERE repo_id = ? ORDER BY pattern",
     )
     .bind(repo_id)
@@ -30,6 +31,7 @@ pub struct NewBranchRule<'a> {
     pub required_approvals: i64,
     pub block_force_push: bool,
     pub block_deletion: bool,
+    pub require_checks: bool,
 }
 
 /// A pattern is a branch name where `*` may stand for any part of one path segment.
@@ -53,8 +55,8 @@ pub async fn add_branch_rule(
         bail!("invalid branch pattern");
     }
     sqlx::query(
-        "INSERT INTO branch_rules (repo_id, pattern, require_pull_request, required_approvals, block_force_push, block_deletion)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO branch_rules (repo_id, pattern, require_pull_request, required_approvals, block_force_push, block_deletion, require_checks)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(repo_id)
     .bind(rule.pattern)
@@ -62,6 +64,7 @@ pub async fn add_branch_rule(
     .bind(rule.required_approvals.clamp(0, 10))
     .bind(rule.block_force_push)
     .bind(rule.block_deletion)
+    .bind(rule.require_checks)
     .execute(db)
     .await
     .map_err(|error| match error {
@@ -130,6 +133,7 @@ mod tests {
             required_approvals: 0,
             block_force_push: true,
             block_deletion: true,
+            require_checks: false,
         };
         let rules = [rule(1, "*"), rule(2, "main")];
         assert_eq!(rule_for_branch(&rules, "main").map(|r| r.id), Some(2));

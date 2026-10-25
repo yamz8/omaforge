@@ -451,6 +451,7 @@ struct PullPage {
     can_reopen: bool,
     can_review: bool,
     flash: Option<String>,
+    checks: Option<super::ci::ChecksView>,
 }
 
 pub async fn conversation(
@@ -554,7 +555,7 @@ async fn conversation_page(
         }
     };
     let blocked_by = if status == "clean" {
-        actions::merge_blocker(state, &repo.repo, pull).await?
+        actions::merge_blocker(state, &repo.repo, pull, &live.head_sha).await?
     } else {
         None
     };
@@ -598,6 +599,7 @@ async fn conversation_page(
             && live.base_exists,
         can_review: repo.viewer.user.is_some() && !author && pull.is_open(),
         flash,
+        checks: super::ci::checks_view(state, repo, &live.head_sha).await?,
     })
 }
 

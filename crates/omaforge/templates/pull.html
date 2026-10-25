@@ -11,6 +11,27 @@
   </div>
   {% include "timeline.html" %}
 
+  {% if let Some(checks) = checks %}
+  <details class="box checks-box {{ checks.summary }}"{% if checks.summary != "success" %} open{% endif %}>
+    <summary>
+      <span class="ci-state {% if checks.summary == "pending" %}running{% else %}{{ checks.summary }}{% endif %}">{% if checks.summary == "success" %}{{ crate::web::icons::CHECK|safe }}{% else if checks.summary == "failure" %}{{ crate::web::icons::CROSS|safe }}{% else %}{{ crate::web::icons::SPINNER|safe }}{% endif %}</span>
+      <strong>{{ checks.headline }}</strong>
+      <span class="muted">{{ checks.items.len() }} check{% if checks.items.len() != 1 %}s{% endif %}</span>
+    </summary>
+    <ul class="check-list">
+      {% for c in checks.items %}
+      <li>
+        <span class="ci-state {{ c.state.class }}" title="{{ c.state.label }}">{{ c.state.icon|safe }}</span>
+        <span class="check-name">{{ c.name }}</span>
+        {% if !c.context.is_empty() %}<span class="muted">{{ c.context }}</span>{% endif %}
+        <span class="check-description">{{ c.description }}</span>
+        <span class="spacer"></span>
+        {% if !c.url.is_empty() %}<a href="{{ c.url }}">Details</a>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   <div class="merge-box {{ merge.status }}">
     {% if !merge.reviews.is_empty() %}
     <div class="merge-row">

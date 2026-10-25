@@ -1,6 +1,7 @@
 mod actions;
 mod api;
 mod auth;
+mod ci;
 mod db;
 mod events;
 mod git_http;
@@ -119,6 +120,8 @@ enum AdminCommand {
         #[arg(long, default_value = "write")]
         role: String,
     },
+    /// Register a CI runner and print the token to start `omaforge-runner` with.
+    CreateRunner { name: String },
     /// Add an SSH public key for a user, read from --key-file or stdin.
     AddSshKey {
         username: String,
@@ -256,6 +259,7 @@ async fn serve(
 ) -> Result<()> {
     hooks::install(data)?;
     events::spawn_worker(state.clone());
+    ci::spawn_reaper(state.clone());
     let host_key = git_ssh::load_or_create_host_key(data)?;
     let ssh = git_ssh::serve(state.clone(), ssh_listen, host_key);
 
@@ -264,6 +268,7 @@ async fn serve(
         .route("/health", get(|| async { "ok" }))
         .merge(git_http::routes())
         .merge(api::routes())
+        .merge(ci::runner_api::routes())
         .merge(web::routes())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -308,6 +313,15 @@ async fn admin(state: &AppState, command: AdminCommand) -> Result<()> {
             let user = find_user(state, &username).await?;
             let (token, hash) = auth::new_token()?;
             db::create_token(&state.db, user.id, &name, &hash).await?;
+            println!("{token}");
+        }
+        AdminCommand::CreateRunner { name } => {
+            let name = name.trim();
+            if name.is_empty() || name.len() > 100 {
+                bail!("a runner name must be 1 to 100 characters");
+            }
+            let (token, hash) = ci::new_runner_token()?;
+            db::create_runner(&state.db, name, &hash).await?;
             println!("{token}");
         }
         AdminCommand::CreateRepo { repo, private } => {

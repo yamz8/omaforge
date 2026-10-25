@@ -76,7 +76,7 @@ pub async fn merge_pull(
     if !pull.is_open() || !tips.head_exists || !tips.base_exists {
         return Ok(Err("This pull request can't be merged.".into()));
     }
-    if let Some(reason) = merge_blocker(state, repo, pull).await? {
+    if let Some(reason) = merge_blocker(state, repo, pull, &tips.head_sha).await? {
         return Ok(Err(reason));
     }
     let message = match method {
@@ -223,11 +223,35 @@ pub async fn merge_blocker(
     state: &AppState,
     repo: &db::Repo,
     pull: &db::Pull,
+    head_sha: &str,
 ) -> Result<Option<String>> {
     let rules = db::branch_rules(&state.db, repo.id).await?;
     let Some(rule) = db::rule_for_branch(&rules, &pull.base_branch) else {
         return Ok(None);
     };
+    if rule.require_checks {
+        let checks = crate::ci::Checks::load(state, repo.id, head_sha).await?;
+        let base = &pull.base_branch;
+        match checks.summary() {
+            Some("success") => {}
+            Some("failure") => {
+                return Ok(Some(format!(
+                    "{base} is protected: checks must pass, and some failed."
+                )))
+            }
+            Some(_) => {
+                return Ok(Some(format!(
+                    "{base} is protected: waiting for checks to finish."
+                )))
+            }
+            // A pull request can't get around required checks by removing the workflow.
+            None => {
+                return Ok(Some(format!(
+                    "{base} is protected: checks must pass, but none have run on the latest commit."
+                )))
+            }
+        }
+    }
     if rule.required_approvals == 0 {
         return Ok(None);
     }

@@ -14,7 +14,7 @@ use forge_git::{Mergeability, Repository};
 use crate::{
     actions,
     auth::{self, Access},
-    db, events, web, AppState,
+    ci, db, events, web, AppState,
 };
 
 pub type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
@@ -548,18 +548,46 @@ pub struct CheckRun {
     started_at: Option<String>,
     completed_at: Option<String>,
     details_url: Option<String>,
+    #[graphql(skip)]
+    repo_id: i64,
+}
+
+/// Whether a pull request's base branch requires checks to pass (then every check is
+/// required; omaforge doesn't name individual required checks).
+async fn checks_required(
+    ctx: &Context<'_>,
+    repo_id: i64,
+    pull_request_id: Option<ID>,
+    pull_request_number: Option<i64>,
+) -> Result<bool> {
+    let db = &api(ctx).state.db;
+    let number = match (pull_request_number, pull_request_id) {
+        (Some(n), _) => n,
+        (None, Some(id)) => {
+            let issue_id = parse_id(&id, "PR")?;
+            match db::pull_by_issue_id(db, issue_id).await.or_internal()? {
+                Some(pull) => pull.number,
+                None => return Ok(false),
+            }
+        }
+        (None, None) => return Ok(false),
+    };
+    let Some(pull) = db::pull(db, repo_id, number).await.or_internal()? else {
+        return Ok(false);
+    };
+    let rules = db::branch_rules(db, repo_id).await.or_internal()?;
+    Ok(db::rule_for_branch(&rules, &pull.base_branch).is_some_and(|r| r.require_checks))
 }
 
 #[async_graphql::ComplexObject]
 impl CheckRun {
-    /// No branch protection yet, so no check is required.
     async fn is_required(
         &self,
+        ctx: &Context<'_>,
         pull_request_id: Option<ID>,
         pull_request_number: Option<i64>,
-    ) -> bool {
-        let _ = (pull_request_id, pull_request_number);
-        false
+    ) -> Result<bool> {
+        checks_required(ctx, self.repo_id, pull_request_id, pull_request_number).await
     }
 }
 
@@ -571,17 +599,19 @@ pub struct StatusContext {
     target_url: Option<String>,
     created_at: String,
     description: Option<String>,
+    #[graphql(skip)]
+    repo_id: i64,
 }
 
 #[async_graphql::ComplexObject]
 impl StatusContext {
     async fn is_required(
         &self,
+        ctx: &Context<'_>,
         pull_request_id: Option<ID>,
         pull_request_number: Option<i64>,
-    ) -> bool {
-        let _ = (pull_request_id, pull_request_number);
-        false
+    ) -> Result<bool> {
+        checks_required(ctx, self.repo_id, pull_request_id, pull_request_number).await
     }
 }
 
@@ -597,12 +627,15 @@ connection!(
     StatusCheckRollupContext
 );
 
-pub struct StatusCheckRollup;
+pub struct StatusCheckRollup {
+    state: StatusState,
+    contexts: Vec<StatusCheckRollupContext>,
+}
 
 #[Object]
 impl StatusCheckRollup {
     async fn state(&self) -> StatusState {
-        StatusState::Success
+        self.state
     }
 
     async fn contexts(
@@ -611,14 +644,120 @@ impl StatusCheckRollup {
         last: Option<i32>,
         after: Option<String>,
     ) -> StatusCheckRollupContextConnection {
-        StatusCheckRollupContextConnection::page(Vec::new(), first, last, after.as_deref())
+        StatusCheckRollupContextConnection::page(
+            self.contexts.clone(),
+            first,
+            last,
+            after.as_deref(),
+        )
     }
+}
+
+/// CI jobs (as check runs) and API-reported statuses for a commit.
+async fn rollup(
+    state: &AppState,
+    repo: &db::Repo,
+    sha: &str,
+) -> anyhow::Result<Option<StatusCheckRollup>> {
+    let checks = ci::Checks::load(state, repo.id, sha).await?;
+    let Some(summary) = checks.summary() else {
+        return Ok(None);
+    };
+    let repo_url = format!("{}/{}/{}", state.site.http_url, repo.owner_name, repo.name);
+    let mut contexts = Vec::new();
+    let check_run = |name: String,
+                     run: &db::Run,
+                     state_name: &str,
+                     status_name: &str,
+                     started: Option<i64>,
+                     completed: Option<i64>,
+                     url: String| {
+        let (status, conclusion) = match status_name {
+            "completed" => (
+                CheckStatusState::Completed,
+                Some(match state_name {
+                    "success" => CheckConclusionState::Success,
+                    "cancelled" => CheckConclusionState::Cancelled,
+                    "skipped" => CheckConclusionState::Skipped,
+                    _ => CheckConclusionState::Failure,
+                }),
+            ),
+            "in_progress" => (CheckStatusState::InProgress, None),
+            "waiting" => (CheckStatusState::Waiting, None),
+            _ => (CheckStatusState::Queued, None),
+        };
+        StatusCheckRollupContext::CheckRun(CheckRun {
+            name,
+            check_suite: Some(CheckSuite {
+                workflow_run: Some(WorkflowRun {
+                    workflow: Workflow {
+                        name: run.workflow_name.clone(),
+                    },
+                }),
+            }),
+            status,
+            conclusion,
+            started_at: started.map(iso),
+            completed_at: completed.map(iso),
+            details_url: Some(url),
+            repo_id: repo.id,
+        })
+    };
+    for (run, jobs) in &checks.runs {
+        let run_url = format!("{repo_url}/actions/runs/{}", run.id);
+        if jobs.is_empty() {
+            contexts.push(check_run(
+                run.workflow_name.clone(),
+                run,
+                run.state(),
+                &run.status,
+                run.started,
+                run.completed,
+                run_url.clone(),
+            ));
+        }
+        for job in jobs {
+            contexts.push(check_run(
+                job.name.clone(),
+                run,
+                job.state(),
+                &job.status,
+                job.started,
+                job.completed,
+                format!("{run_url}/jobs/{}", job.id),
+            ));
+        }
+    }
+    for status in &checks.statuses {
+        contexts.push(StatusCheckRollupContext::StatusContext(StatusContext {
+            context: status.context.clone(),
+            state: match status.state.as_str() {
+                "success" => StatusState::Success,
+                "failure" => StatusState::Failure,
+                "error" => StatusState::Error,
+                _ => StatusState::Pending,
+            },
+            target_url: (!status.target_url.is_empty()).then(|| status.target_url.clone()),
+            created_at: iso(status.created),
+            description: (!status.description.is_empty()).then(|| status.description.clone()),
+            repo_id: repo.id,
+        }));
+    }
+    Ok(Some(StatusCheckRollup {
+        state: match summary {
+            "success" => StatusState::Success,
+            "failure" => StatusState::Failure,
+            _ => StatusState::Pending,
+        },
+        contexts,
+    }))
 }
 
 #[derive(Clone)]
 pub struct Commit {
     commit: forge_git::Commit,
     url: String,
+    repo: db::Repo,
 }
 
 #[Object]
@@ -651,9 +790,10 @@ impl Commit {
         &self.url
     }
 
-    /// No CI yet: always no checks.
-    async fn status_check_rollup(&self) -> Option<StatusCheckRollup> {
-        None
+    async fn status_check_rollup(&self, ctx: &Context<'_>) -> Result<Option<StatusCheckRollup>> {
+        rollup(&api(ctx).state, &self.repo, &self.commit.id)
+            .await
+            .or_internal()
     }
 }
 
@@ -1654,6 +1794,7 @@ impl PullRequestNode {
                 commit: Commit {
                     url: format!("{base}/commit/{}", commit.id),
                     commit,
+                    repo: self.repo.repo.clone(),
                 },
             })
             .collect();
@@ -1849,7 +1990,7 @@ impl PullRequestNode {
         if let Mergeability::Conflicts(_) = mergeability {
             return Ok(MergeStateStatus::Dirty);
         }
-        let blocked = actions::merge_blocker(state, &self.repo.repo, &self.pull)
+        let blocked = actions::merge_blocker(state, &self.repo.repo, &self.pull, &tips.head_sha)
             .await
             .or_internal()?;
         Ok(if blocked.is_some() {

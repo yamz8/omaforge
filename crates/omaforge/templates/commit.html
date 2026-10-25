@@ -10,6 +10,7 @@
       <span><strong>{{ commit.author }}</strong> authored{% if let Some(name) = committer %}, <strong>{{ name }}</strong> committed{% endif %} <span title="{{ commit.timestamp }}">{{ commit.time_ago }}</span></span>
       <span class="spacer"></span>
       {% if !parents.is_empty() %}<span class="muted">{% if parents.len() == 1 %}Parent{% else %}Parents{% endif %} {% for (short, url) in parents %}<a class="sha" href="{{ url }}">{{ short }}</a> {% endfor %}</span>{% endif %}
+      {% if let Some(k) = commit.checks %}<a class="ci-state commit-checks {{ k.class }}" href="{{ k.url }}" title="{{ k.title }}">{{ k.icon|safe }}</a>{% endif %}
       <span class="muted">Commit <span class="sha">{{ commit.id }}</span></span>
       <a class="button" href="{{ commit.browse_url }}">Browse files</a>
     </div>

@@ -8,6 +8,7 @@
   <a href="{{ repo.url }}"{% if repo.tab == "code" %} class="active"{% endif %}>{{ crate::web::icons::CODE|safe }}Code</a>
   <a href="{{ repo.url }}/issues"{% if repo.tab == "issues" %} class="active"{% endif %}>{{ crate::web::icons::ISSUE|safe }}Issues{% if repo.open_issues > 0 %} <span class="count">{{ repo.open_issues }}</span>{% endif %}</a>
   <a href="{{ repo.url }}/pulls"{% if repo.tab == "pulls" %} class="active"{% endif %}>{{ crate::web::icons::PULL|safe }}Pull requests{% if repo.open_pulls > 0 %} <span class="count">{{ repo.open_pulls }}</span>{% endif %}</a>
+  <a href="{{ repo.url }}/actions"{% if repo.tab == "actions" %} class="active"{% endif %}>{{ crate::web::icons::PLAY|safe }}Actions</a>
   <a href="{{ repo.url }}/commits"{% if repo.tab == "commits" %} class="active"{% endif %}>{{ crate::web::icons::HISTORY|safe }}Commits</a>
   <a href="{{ repo.url }}/branches"{% if repo.tab == "branches" %} class="active"{% endif %}>{{ crate::web::icons::BRANCH|safe }}Branches</a>
   <a href="{{ repo.url }}/tags"{% if repo.tab == "tags" %} class="active"{% endif %}>{{ crate::web::icons::TAG|safe }}Tags</a>

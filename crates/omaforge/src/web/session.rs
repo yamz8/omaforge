@@ -183,6 +183,12 @@ pub struct CsrfForm {
     csrf: String,
 }
 
+impl CsrfForm {
+    pub fn csrf(&self) -> &str {
+        &self.csrf
+    }
+}
+
 pub async fn logout(
     State(state): State<AppState>,
     viewer: Viewer,

@@ -2,7 +2,9 @@
 //! omaforge: REST under `/api/v3` and GraphQL at `/api/graphql`, the paths GitHub
 //! Enterprise uses, so `GH_HOST=forge.example.com gh pr list` just works.
 
+mod actions;
 mod graphql;
+mod zip;
 
 use std::sync::OnceLock;
 
@@ -22,6 +24,7 @@ use crate::{
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(actions::routes())
         .route("/api/graphql", post(graphql_handler))
         .route("/api/v3", get(root))
         .route("/api/v3/", get(root))

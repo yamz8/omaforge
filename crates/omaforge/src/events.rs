@@ -64,7 +64,7 @@ async fn quietly(what: &str, result: impl std::future::Future<Output = Result<()
     }
 }
 
-fn repository(state: &AppState, repo: &db::Repo) -> Value {
+pub fn repository(state: &AppState, repo: &db::Repo) -> Value {
     let mut value = api::repo_json(state, repo, Access::Read, "");
     // Permissions describe the viewer, which a webhook doesn't have.
     if let Some(object) = value.as_object_mut() {
@@ -165,6 +165,7 @@ pub async fn push(
         "sender": sender(state, pusher),
     });
     emit(state, repo, "push", &payload).await?;
+    crate::ci::on_event(state, repo, "push", &payload, pusher).await;
 
     let (short, ref_type) = match (
         update.name.strip_prefix("refs/heads/"),
@@ -237,7 +238,9 @@ async fn pull_request_payload(
         "repository": repository(state, repo),
         "sender": sender(state, actor),
     });
-    emit(state, repo, "pull_request", &payload).await
+    emit(state, repo, "pull_request", &payload).await?;
+    crate::ci::on_event(state, repo, "pull_request", &payload, actor).await;
+    Ok(())
 }
 
 /// `opened`, `closed` (with `merged` true or false), `reopened`, `edited`, ...

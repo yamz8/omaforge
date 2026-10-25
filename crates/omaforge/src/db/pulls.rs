@@ -110,6 +110,14 @@ pub async fn pull(db: &SqlitePool, repo_id: i64, number: i64) -> Result<Option<P
     Ok(pull)
 }
 
+pub async fn pull_by_issue_id(db: &SqlitePool, issue_id: i64) -> Result<Option<Pull>> {
+    let pull = sqlx::query_as(pull_select!("i.id = ?"))
+        .bind(issue_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(pull)
+}
+
 /// Pull requests that are `open` or `closed` (merged ones count as closed), newest first.
 pub async fn pulls(db: &SqlitePool, repo_id: i64, state: &str) -> Result<Vec<Pull>> {
     let pulls = sqlx::query_as(concat!(

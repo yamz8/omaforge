@@ -38,8 +38,34 @@ cd my-clone && gh pr create            # or: GH_HOST=forge.example.com gh pr lis
 
 Tested: `gh repo view/clone`, `gh issue create/list/view/comment/edit/close/reopen`,
 `gh pr create/list/view/diff/checks/status/edit/review/comment/merge/close/reopen`,
-and `gh api`. omaforge has no projects, milestones, reactions or CI checks yet, so those
-come back empty.
+`gh run list/view/rerun/cancel` (with `--log` and `--log-failed`), and `gh api`.
+omaforge has no projects, milestones or reactions yet, so those come back empty.
+
+### CI
+
+Put GitHub Actions-style workflows in `.omaforge/workflows/` or `.github/workflows/`
+(see the [roadmap](docs/roadmap.md) for what's supported). Jobs run on
+`omaforge-runner`, on any machine that can reach the server:
+
+```sh
+cargo run -- admin create-runner build-box        # prints an omr_… runner token
+export OMAFORGE_RUNNER_TOKEN=omr_…                # kept out of the process list
+cargo run -p omaforge-runner -- --server http://127.0.0.1:3000 \
+    --label ubuntu-latest=docker://ubuntu:24.04 \
+    --label self-hosted=host
+```
+
+Each `--label` says where jobs with that label run: in a Docker container from the
+image, or (`=host`) directly on the runner's machine as the runner's user. Host jobs
+aren't isolated from the runner, so they could read its token and pick up other
+repositories' jobs: only give a runner host labels if you trust everyone who can push
+workflows. The Docker executor needs the runner's user to be able to use Docker
+(`sudo usermod -aG docker $USER`). Site admins can also add runners and see which are
+online under Settings → CI runners.
+
+Results show up on the Actions tab, as checks on pull requests and commits, and through
+`gh`. Branch protection can require checks to pass before merging, and other CI systems
+can report results with the commit statuses API (`POST /api/v3/repos/{owner}/{repo}/statuses/{sha}`).
 
 Run the end-to-end tests (real server, real git over HTTP and SSH) with:
 

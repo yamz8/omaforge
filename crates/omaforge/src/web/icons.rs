@@ -89,3 +89,25 @@ icon!(
     GEAR,
     r#"<circle cx="8" cy="8" r="2.25"/><path d="M8 1.5v1.75M8 12.75v1.75M14.5 8h-1.75M3.25 8H1.5M12.6 3.4l-1.25 1.25M4.65 11.35 3.4 12.6M12.6 12.6l-1.25-1.25M4.65 4.65 3.4 3.4"/>"#
 );
+icon!(
+    PLAY,
+    r#"<circle cx="8" cy="8" r="6.25"/><path d="M6.5 5.5v5l4-2.5Z"/>"#
+);
+icon!(CROSS, r#"<path d="M4 4l8 8M12 4l-8 8"/>"#);
+icon!(CIRCLE, r#"<circle cx="8" cy="8" r="5.25"/>"#);
+icon!(
+    SPINNER,
+    r#"<circle cx="8" cy="8" r="5.25" opacity="0.3"/><path class="spin" d="M8 2.75A5.25 5.25 0 0 1 13.25 8"/>"#
+);
+icon!(
+    SKIPPED,
+    r#"<circle cx="8" cy="8" r="5.25"/><path d="M4.5 11.5l7-7"/>"#
+);
+icon!(
+    STOPPED,
+    r#"<circle cx="8" cy="8" r="5.25"/><path d="M6 6h4v4H6Z"/>"#
+);
+icon!(
+    RERUN,
+    r#"<path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M11.75 2.25v2.5h-2.5"/>"#
+);

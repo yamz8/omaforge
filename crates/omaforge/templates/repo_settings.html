@@ -81,6 +81,7 @@
       <label class="choice"><input type="checkbox" name="require_pull_request" checked> <span>Require a pull request <span class="muted">(no direct pushes)</span></span></label>
       <label class="choice"><input type="checkbox" name="block_force_push" checked> <span>Block force pushes</span></label>
       <label class="choice"><input type="checkbox" name="block_deletion" checked> <span>Block deletion</span></label>
+      <label class="choice"><input type="checkbox" name="require_checks"> <span>Require checks to pass <span class="muted">(every CI job and status on the pull request's latest commit)</span></span></label>
       <label class="choice approvals"><span>Approving reviews required to merge</span><input type="number" name="required_approvals" value="1" min="0" max="10"></label>
     </fieldset>
     <button class="button primary" type="submit">Protect branch</button>

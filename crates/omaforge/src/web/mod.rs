@@ -1,5 +1,6 @@
 //! The HTML interface: server-rendered pages with no JavaScript required.
 
+mod ci;
 mod conversation;
 mod diff;
 mod icons;
@@ -27,6 +28,7 @@ use axum::{
 use crate::AppState;
 
 const STYLE: &str = include_str!("../../assets/style.css");
+const LIVE_SCRIPT: &str = include_str!("../../assets/live.js");
 
 /// The stylesheet's URL, versioned by content so it can be cached forever and still
 /// update the moment omaforge does.
@@ -36,6 +38,16 @@ pub fn style_url() -> &'static str {
         use sha2::{Digest, Sha256};
         let hash = hex::encode(Sha256::digest(STYLE.as_bytes()));
         format!("/assets/style.css?v={}", &hash[..12])
+    })
+}
+
+/// The live-update script for CI pages, versioned like the stylesheet.
+pub fn live_script_url() -> &'static str {
+    static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+        let hash = hex::encode(Sha256::digest(LIVE_SCRIPT.as_bytes()));
+        format!("/assets/live.js?v={}", &hash[..12])
     })
 }
 
@@ -68,6 +80,7 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(repo::index))
         .route("/assets/style.css", get(style))
         .route("/assets/theme.css", get(theme_css))
+        .route("/assets/live.js", get(live_script))
         .route("/login", get(session::login_form).post(session::login))
         .route("/logout", post(session::logout))
         .route(
@@ -85,6 +98,14 @@ pub fn routes() -> Router<AppState> {
             get(settings::tokens).post(settings::create_token),
         )
         .route("/settings/tokens/{id}/delete", post(settings::delete_token))
+        .route(
+            "/settings/runners",
+            get(settings::runners).post(settings::create_runner),
+        )
+        .route(
+            "/settings/runners/{id}/delete",
+            post(settings::delete_runner),
+        )
         .route(
             "/settings/password",
             get(settings::password).post(settings::change_password),
@@ -182,6 +203,19 @@ pub fn routes() -> Router<AppState> {
             "/{owner}/{repo}/settings/delete",
             post(repo_settings::delete),
         )
+        .route("/{owner}/{repo}/actions", get(ci::list))
+        .route("/{owner}/{repo}/actions/runs/{id}", get(ci::show))
+        .route("/{owner}/{repo}/actions/runs/{id}/cancel", post(ci::cancel))
+        .route("/{owner}/{repo}/actions/runs/{id}/rerun", post(ci::rerun))
+        .route("/{owner}/{repo}/actions/runs/{id}/jobs/{job}", get(ci::job))
+        .route(
+            "/{owner}/{repo}/actions/runs/{id}/jobs/{job}/live",
+            get(ci::live),
+        )
+        .route(
+            "/{owner}/{repo}/actions/runs/{id}/jobs/{job}/logs",
+            get(ci::logs),
+        )
         .route("/{owner}/{repo}/branches", get(repo::branches))
         .route("/{owner}/{repo}/tags", get(repo::tags))
         .fallback(|| async { WebError::NotFound })
@@ -194,6 +228,16 @@ async fn style() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
         STYLE,
+    )
+}
+
+async fn live_script() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        LIVE_SCRIPT,
     )
 }
 
