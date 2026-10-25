@@ -35,7 +35,7 @@ refuse() {
     if "$@" >"$W/last.log" 2>&1; then
         echo "FAIL $name (should have been refused)"; fail=$((fail + 1))
     else
-        echo "PASS $name ($(grep -m1 -oE '(omaforge|fatal|[Ee]rror|.*Permission denied).*' "$W/last.log"))"
+        echo "PASS $name ($(grep -m1 -oE '(omaforge|fatal|GraphQL|[Ee]rror|.*Permission denied).*' "$W/last.log"))"
         pass=$((pass + 1))
     fi
 }
@@ -443,6 +443,62 @@ check "delete needs full name"      bash -c "grep -q 'Nothing was deleted' $W/po
 check "delete needs CSRF"           test "$(post $A /alice/renamed/settings/delete csrf=nope confirm=alice/renamed | cut -d' ' -f1)" = 403
 R=$(post $A /alice/renamed/settings/delete csrf=$(csrf $A /alice/renamed/settings) confirm=alice/renamed)
 check "delete"                      bash -c "[ '$R' = '303 $URL/alice' ] && [ ! -e $OMAFORGE_DATA/repos/alice/renamed.git ] && [ \"\$(db \"select count(*) from repos where name = 'renamed'\")\" = 0 ] && [ \"\$(db \"select count(*) from issues where repo_id not in (select id from repos)\")\" = 0 ]"
+
+echo "== gh CLI (GitHub-compatible API)"
+if ! command -v gh >/dev/null || ! command -v openssl >/dev/null; then
+    echo "SKIP gh/openssl not installed"
+else
+    # gh only talks HTTPS to hosts other than github.com, so put TLS in front of the server.
+    TLS_PORT=${E2E_TLS_PORT:-3923}
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout $W/tls-key.pem -out $W/tls-cert.pem \
+        -days 2 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" 2>/dev/null
+    python3 -I $ROOT/tests/tls_proxy.py $TLS_PORT $PORT $W/tls-cert.pem $W/tls-key.pem & PROXY=$!
+    trap 'kill $SERVER $PROXY 2>/dev/null' EXIT
+    sleep 0.5
+    mkdir -p $W/gh
+    export GH_CONFIG_DIR=$W/gh GH_HOST=localhost:$TLS_PORT GH_NO_UPDATE_NOTIFIER=1 GH_PROMPT_DISABLED=1 GH_PAGER=cat NO_COLOR=1
+    export SSL_CERT_FILE=$W/tls-cert.pem GIT_SSL_CAINFO=$W/tls-cert.pem
+    BOB_TOKEN=$($BIN admin create-token bob gh)
+    ALICE_GH() { GH_ENTERPRISE_TOKEN=$WEB_TOKEN gh "$@"; }
+    BOB_GH() { GH_ENTERPRISE_TOKEN=$BOB_TOKEN gh "$@"; }
+    export -f ALICE_GH BOB_GH; export WEB_TOKEN BOB_TOKEN
+    GHR="-R alice/prs"
+    check "gh api user"                 bash -c "ALICE_GH api user | grep -q '\"login\":\"alice\"'"
+    check "gh repo view"                bash -c "ALICE_GH repo view alice/prs | grep -q 'name:.*alice/prs'"
+    check "gh issue create"             bash -c "BOB_GH issue create $GHR -t 'Typo in the docs' -b 'It says teh.' | grep -q '/alice/prs/issues/'"
+    ISSUE=$(BOB_GH issue list $GHR | awk '/Typo in the docs/{print $1}')
+    check "gh issue list"               test -n "$ISSUE"
+    check "gh issue view"               bash -c "BOB_GH issue view $ISSUE $GHR | grep -q 'It says teh.'"
+    check "gh issue comment"            bash -c "ALICE_GH issue comment $ISSUE $GHR -b 'Good catch' | grep -q '#comment-' && ALICE_GH issue view $ISSUE $GHR --comments | grep -q 'Good catch'"
+    check "gh issue edit (labels)"      bash -c "ALICE_GH issue edit $ISSUE $GHR --add-label bug --title 'Typo: teh' >/dev/null && ALICE_GH issue view $ISSUE $GHR | grep -q 'labels:.*bug' && ALICE_GH issue view $ISSUE $GHR | grep -q 'Typo: teh'"
+    refuse "bob can't label via gh"     BOB_GH issue edit $ISSUE $GHR --add-label question
+    check "gh issue close/reopen"       bash -c "BOB_GH issue close $ISSUE $GHR && BOB_GH issue list $GHR --state closed | grep -q 'Typo: teh' && BOB_GH issue reopen $ISSUE $GHR"
+    (cd prs-src && git checkout -q main && git pull -q $PRS main && git checkout -qb fix-typo && echo "the" >docs.txt && git add docs.txt \
+        && git commit -qm "Fix the typo" -m "Fixes #$ISSUE" && git push -q $PRS fix-typo && git checkout -qb two-cents main && echo x >x.txt && git add x.txt && git commit -qm x && git push -q $PRS two-cents && git checkout -q main)
+    check "gh pr create"                bash -c "BOB_GH pr create $GHR -B main -H fix-typo -t 'Fix the typo' -b 'Small fix.' | grep -q '/alice/prs/pull/'"
+    PR=$(BOB_GH pr list $GHR | awk '/Fix the typo/{print $1}')
+    check "gh pr list"                  test -n "$PR"
+    check "gh pr view"                  bash -c "BOB_GH pr view $PR $GHR | grep -q 'Small fix.' && BOB_GH pr view $PR $GHR | grep -q 'state:.*OPEN'"
+    check "gh pr diff"                  bash -c "BOB_GH pr diff $PR $GHR | grep -q '^+the$'"
+    check "gh pr checks (none)"         bash -c "BOB_GH pr checks $PR $GHR 2>&1 | grep -q 'no checks reported'"
+    check "gh pr status"                bash -c "BOB_GH pr status $GHR | grep -q 'Relevant pull requests'"
+    check "gh pr edit (author)"         bash -c "BOB_GH pr edit $PR $GHR --title 'Fix the docs typo' >/dev/null && BOB_GH pr view $PR $GHR | grep -q 'Fix the docs typo'"
+    refuse "gh: no self-approval"       BOB_GH pr review $PR $GHR --approve
+    check "gh pr review --approve"      bash -c "ALICE_GH pr review $PR $GHR --approve >/dev/null && ALICE_GH pr view $PR $GHR | grep -q 'alice (Approved)'"
+    check "gh pr comment"               bash -c "BOB_GH pr comment $PR $GHR -b 'Thanks!' | grep -q '#comment-'"
+    refuse "bob can't merge via gh"     BOB_GH pr merge $PR $GHR --squash
+    check "gh pr merge --squash"        bash -c "ALICE_GH pr merge $PR $GHR --squash && ALICE_GH pr view $PR $GHR | grep -q 'state:.*MERGED'"
+    check "merge closed 'Fixes #N'"     bash -c "ALICE_GH issue list $GHR --state closed | grep -q 'Typo: teh'"
+    BOB_GH pr create $GHR -B main -H two-cents -t 'Two cents' -b '' >/dev/null 2>&1
+    PR2=$(BOB_GH pr list $GHR | awk '/Two cents/{print $1}')
+    check "gh pr close/reopen"          bash -c "BOB_GH pr close $PR2 $GHR && BOB_GH pr list $GHR --state closed | grep -q 'Two cents' && BOB_GH pr reopen $PR2 $GHR && BOB_GH pr list $GHR | grep -q 'Two cents'"
+    check "gh repo clone"               bash -c "cd $W && ALICE_GH repo clone alice/prs gh-clone -- -q && test -f gh-clone/docs.txt"
+    # gh can't match a git remote whose host has a port (the test port here) to GH_HOST,
+    # so `gh pr checkout` only works against a real deployment on port 443.
+    echo "SKIP gh pr checkout (gh doesn't support hosts with a port for this; fine on 443)"
+    refuse "private repo hidden in gh"  BOB_GH repo view alice/secret
+    check "bad token rejected"          bash -c "GH_ENTERPRISE_TOKEN=omf_nope gh api user 2>&1 | grep -q 'Bad credentials'"
+fi
 
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then

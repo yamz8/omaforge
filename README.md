@@ -26,6 +26,21 @@ cargo run -- import local ~/code/* --owner alice --dry-run
 cargo run -- import local ~/code/* --owner alice
 ```
 
+### Using the `gh` CLI
+
+omaforge speaks enough of GitHub's API (REST at `/api/v3`, GraphQL at `/api/graphql`,
+GitHub Enterprise's paths) for `gh` to work. Behind HTTPS on its own hostname:
+
+```sh
+gh auth login --hostname forge.example.com --with-token < token.txt   # an omf_ access token
+cd my-clone && gh pr create            # or: GH_HOST=forge.example.com gh pr list -R you/repo
+```
+
+Tested: `gh repo view/clone`, `gh issue create/list/view/comment/edit/close/reopen`,
+`gh pr create/list/view/diff/checks/status/edit/review/comment/merge/close/reopen`,
+and `gh api`. omaforge has no projects, milestones, reactions or CI checks yet, so those
+come back empty.
+
 Run the end-to-end tests (real server, real git over HTTP and SSH) with:
 
 ```sh

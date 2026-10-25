@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Redirect},
     Form,
 };
-use forge_git::{diff::FileStatus, Identity, MergeMethod, Mergeability};
+use forge_git::{diff::FileStatus, Mergeability};
 use serde::Deserialize;
 
 use super::{
@@ -18,7 +18,7 @@ use super::{
     repo::{load, CommitView, Loaded, RepoContext},
     Viewer, WebError, WebResult,
 };
-use crate::{db, AppState};
+use crate::{actions, db, AppState};
 
 /// Commits shown when comparing branches or on a pull request.
 const COMMIT_LIMIT: usize = 250;
@@ -44,41 +44,14 @@ async fn live_pull(state: &AppState, repo: &Loaded, number: i64) -> WebResult<Li
         }
         None => return Err(WebError::NotFound),
     };
-    let mut live = Live {
-        base_sha: pull.base_sha.clone(),
-        head_sha: pull.head_sha.clone(),
-        base_exists: false,
-        head_exists: false,
+    let tips = actions::pull_tips(state, &repo.git, &pull).await?;
+    let live = Live {
+        base_sha: tips.base_sha,
+        head_sha: tips.head_sha,
+        base_exists: tips.base_exists,
+        head_exists: tips.head_exists,
         pull,
     };
-    let branch = |name: &str| format!("refs/heads/{name}");
-    let base = repo
-        .git
-        .resolve_commit(&branch(&live.pull.base_branch))
-        .await?;
-    let head = repo
-        .git
-        .resolve_commit(&branch(&live.pull.head_branch))
-        .await?;
-    live.base_exists = base.is_some();
-    live.head_exists = head.is_some();
-    if live.pull.is_open() {
-        if let Some(base) = base {
-            live.base_sha = base;
-        }
-        if let Some(head) = head {
-            live.head_sha = head;
-        }
-        if live.base_sha != live.pull.base_sha || live.head_sha != live.pull.head_sha {
-            db::update_pull_shas(
-                &state.db,
-                live.pull.issue_id,
-                &live.base_sha,
-                &live.head_sha,
-            )
-            .await?;
-        }
-    }
     Ok(live)
 }
 
@@ -135,14 +108,6 @@ fn pull_context(
         commit_count,
         file_count,
         tab,
-    }
-}
-
-fn identity(state: &AppState, username: &str, email: Option<String>) -> Identity {
-    let host = super::url_host(&state.site.http_url);
-    Identity {
-        name: username.to_owned(),
-        email: email.unwrap_or_else(|| format!("{username}@users.noreply.{host}")),
     }
 }
 
@@ -425,26 +390,13 @@ pub async fn open(
     let body = form.body.trim().to_owned();
     let retry = |error: &str| (Some((title.clone(), body.clone())), Some(error.to_owned()));
 
-    let branch = |name: &str| format!("refs/heads/{name}");
-    let base_sha = repo.git.resolve_commit(&branch(&form.base)).await?;
-    let head_sha = repo.git.resolve_commit(&branch(&form.head)).await?;
-    let (form_values, error) = match (&base_sha, &head_sha) {
-        _ if title.is_empty() => retry("Give the pull request a title."),
-        (Some(_), Some(_)) if form.base == form.head => retry("Choose two different branches."),
-        (Some(base_sha), Some(head_sha)) => {
-            if db::open_pull_for(&state.db, repo.repo.id, &form.base, &form.head)
-                .await?
-                .is_some()
-            {
-                retry("There's already an open pull request for these branches.")
-            } else if repo
-                .git
-                .compare_log(base_sha, head_sha, 1)
-                .await?
-                .is_empty()
-            {
-                retry("There's nothing to merge.")
-            } else {
+    let (form_values, error) = if title.is_empty() {
+        retry("Give the pull request a title.")
+    } else {
+        match actions::check_new_pull(&state, &repo.repo, &repo.git, &form.base, &form.head).await?
+        {
+            Err(reason) => retry(reason),
+            Ok((base_sha, head_sha)) => {
                 let number = db::create_pull(
                     &state.db,
                     &db::NewPull {
@@ -454,8 +406,8 @@ pub async fn open(
                         body: &body,
                         base_branch: &form.base,
                         head_branch: &form.head,
-                        base_sha,
-                        head_sha,
+                        base_sha: &base_sha,
+                        head_sha: &head_sha,
                     },
                 )
                 .await?;
@@ -463,7 +415,6 @@ pub async fn open(
                 return Ok(Redirect::to(&format!("{}/pull/{number}", repo.url)).into_response());
             }
         }
-        _ => retry("One of those branches doesn't exist."),
     };
     compare_page(&state, &repo, form.base, form.head, form_values, error).await
 }
@@ -912,97 +863,12 @@ pub async fn merge(
     if !can_write(&repo) {
         return Err(WebError::Forbidden);
     }
-    let method = match form.method.as_str() {
-        "merge" => MergeMethod::Merge,
-        "squash" => MergeMethod::Squash,
-        "rebase" => MergeMethod::Rebase,
-        _ => {
-            return conversation_page(&state, &repo, live, Some("Choose how to merge.".into()))
-                .await
-        }
+    let Some(method) = actions::parse_merge_method(&form.method) else {
+        return conversation_page(&state, &repo, live, Some("Choose how to merge.".into())).await;
     };
-    if !live.pull.is_open() || !live.head_exists || !live.base_exists {
-        return conversation_page(
-            &state,
-            &repo,
-            live,
-            Some("This pull request can't be merged.".into()),
-        )
-        .await;
-    }
-    let pull = &live.pull;
-    let message = match method {
-        MergeMethod::Squash if pull.body.is_empty() => {
-            format!("{} (#{})\n", pull.title, pull.number)
-        }
-        MergeMethod::Squash => format!("{} (#{})\n\n{}\n", pull.title, pull.number, pull.body),
-        _ => format!(
-            "Merge pull request #{} from {}\n\n{}\n",
-            pull.number, pull.head_branch, pull.title
-        ),
-    };
-    let author = identity(
-        &state,
-        &pull.author,
-        db::user_email(&state.db, pull.author_id).await?,
-    );
-    let committer = identity(
-        &state,
-        &user.username,
-        db::user_email(&state.db, user.id).await?,
-    );
-    let result = repo
-        .git
-        .merge(
-            &pull.base_branch,
-            &live.base_sha,
-            &live.head_sha,
-            method,
-            &message,
-            &author,
-            &committer,
-        )
-        .await;
-    match result {
-        Ok(merge_sha) => {
-            db::mark_merged(
-                &state.db,
-                &db::Merged {
-                    issue_id: pull.issue_id,
-                    merged_by: user.id,
-                    method: &form.method,
-                    merge_sha: &merge_sha,
-                    base_sha: &live.base_sha,
-                    head_sha: &live.head_sha,
-                },
-            )
-            .await?;
-            tracing::info!(repo = %repo.url, number, user = %user.username, method = %form.method, "merged pull request");
-            // "Fixes #12" in the pull request or its commits closes issue #12.
-            let commits = repo
-                .git
-                .compare_log(&live.base_sha, &live.head_sha, COMMIT_LIMIT)
-                .await?;
-            let mut text = format!("{}\n{}\n", pull.title, pull.body);
-            for commit in &commits {
-                text.push_str(&format!("{}\n{}\n", commit.subject, commit.body));
-            }
-            for closes in render::closing_references(&text) {
-                if let Some(issue) = db::issue(&state.db, repo.repo.id, closes).await? {
-                    db::close_issue_by(&state.db, issue.issue_id, user.id, pull.number).await?;
-                }
-            }
-            Ok(Redirect::to(&pull_url).into_response())
-        }
-        Err(error) => {
-            conversation_page(
-                &state,
-                &repo,
-                live,
-                Some(format!("Couldn't merge: {error}.")),
-            )
-            .await
-        }
+    match actions::merge_pull(&state, &repo.repo, &repo.git, &live.pull, &user, method).await? {
+        Ok(_) => Ok(Redirect::to(&pull_url).into_response()),
+        Err(reason) => conversation_page(&state, &repo, live, Some(reason)).await,
     }
 }
 

@@ -27,7 +27,7 @@ Each milestone should be something you can use day to day before the next one st
 - [ ] Notifications, plus webhooks with GitHub-shaped payloads
 
 ## M2: Leave GitHub (or don't)
-- [ ] `/api/v3` subset that `gh` needs for repo/issue/PR commands
+- [x] `/api/v3` + `/api/graphql` subset that `gh` needs for repo/issue/PR commands (tested with real `gh`)
 - [ ] `omaforge import github`: git, issues, PRs, comments, labels, releases
 - [ ] Sync modes: mirror-from, mirror-to, bidirectional (see architecture.md)
 

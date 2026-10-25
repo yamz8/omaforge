@@ -1,3 +1,5 @@
+mod actions;
+mod api;
 mod auth;
 mod db;
 mod git_http;
@@ -238,6 +240,7 @@ async fn serve(
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(git_http::routes())
+        .merge(api::routes())
         .merge(web::routes())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

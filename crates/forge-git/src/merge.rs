@@ -64,6 +64,11 @@ impl Repository {
 
     /// The changes `head` makes since it diverged from `base` (`base...head`).
     pub async fn compare_diff(&self, base: &str, head: &str) -> Result<Vec<FileDiff>> {
+        Ok(diff::parse(&self.compare_patch(base, head).await?))
+    }
+
+    /// The same changes as a unified diff.
+    pub async fn compare_patch(&self, base: &str, head: &str) -> Result<String> {
         let range = format!("{}...{}", check_id(base)?, check_id(head)?);
         let out = self
             .run([
@@ -76,7 +81,7 @@ impl Repository {
                 &range,
             ])
             .await?;
-        Ok(diff::parse(&String::from_utf8_lossy(&out)))
+        Ok(String::from_utf8_lossy(&out).into_owned())
     }
 
     pub async fn mergeability(&self, base: &str, head: &str) -> Result<Mergeability> {

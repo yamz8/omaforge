@@ -580,6 +580,18 @@ pub fn timestamp(time: i64) -> String {
     )
 }
 
+/// RFC 3339 in UTC, `2026-10-25T01:02:03Z`, as APIs use.
+pub fn iso8601(time: i64) -> String {
+    let (year, month, day) = civil_from_days(time.div_euclid(86400));
+    let secs = time.rem_euclid(86400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs / 3600,
+        secs / 60 % 60,
+        secs % 60
+    )
+}
+
 /// Days since 1970-01-01 to (year, month, day), from Howard Hinnant's algorithm.
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
@@ -617,6 +629,7 @@ mod tests {
         assert_eq!(date(0), "Jan 1, 1970");
         assert_eq!(date(1_761_436_800), "Oct 26, 2025");
         assert_eq!(timestamp(1_761_436_800 + 3661), "2025-10-26 01:01 UTC");
+        assert_eq!(iso8601(1_761_436_800 + 3661), "2025-10-26T01:01:01Z");
     }
 
     #[test]

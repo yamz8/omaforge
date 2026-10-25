@@ -31,6 +31,7 @@ and optionally staying in sync with GitHub.
 | db | Users, orgs, repos metadata, issues, PRs, reviews, CI runs, sync mappings | sqlx + SQLite (Postgres later) |
 | jobs | Durable queue in the DB: webhooks, sync, CI dispatch, agent tasks, indexing | tokio tasks over a `jobs` table |
 | CI | Parses GitHub Actions YAML (a subset that grows over time); a separate `omaforge-runner` runs jobs in podman/docker containers | serde_yaml, bollard |
+| api | GitHub-compatible REST (`/api/v3`) and GraphQL (`/api/graphql`) subset for `gh` and scripts; shares merge/permission logic with the web through `actions` | async-graphql |
 | GitHub bridge | One-time import and continuous two-way sync | octocrab |
 | agents | Bot users driven by the Claude API: PR review, issue triage, "fix this" tasks | reqwest |
 

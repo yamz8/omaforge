@@ -88,6 +88,15 @@ pub async fn issue(db: &SqlitePool, repo_id: i64, number: i64) -> Result<Option<
     Ok(issue)
 }
 
+/// The repository and number of an issue or pull request, from its row id.
+pub async fn issue_location(db: &SqlitePool, issue_id: i64) -> Result<Option<(i64, i64)>> {
+    let location = sqlx::query_as("SELECT repo_id, number FROM issues WHERE id = ?")
+        .bind(issue_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(location)
+}
+
 /// Whether `#number` is a pull request (`Some(true)`), an issue (`Some(false)`) or nothing.
 pub async fn number_kind(db: &SqlitePool, repo_id: i64, number: i64) -> Result<Option<bool>> {
     let is_pull = sqlx::query_scalar("SELECT is_pull FROM issues WHERE repo_id = ? AND number = ?")
@@ -144,6 +153,24 @@ pub async fn issue_numbers(db: &SqlitePool, repo_id: i64) -> Result<HashSet<i64>
         .fetch_all(db)
         .await?;
     Ok(numbers.into_iter().collect())
+}
+
+/// Change an issue's or pull request's title and description.
+pub async fn update_issue_text(
+    db: &SqlitePool,
+    issue_id: i64,
+    title: &str,
+    body: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE issues SET title = ?, body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(title)
+    .bind(body)
+    .bind(issue_id)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// Close an issue because a pull request that said "fixes #N" was merged.

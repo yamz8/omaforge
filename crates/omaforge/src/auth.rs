@@ -77,13 +77,26 @@ pub enum Identity {
     Invalid,
 }
 
-/// Authenticate HTTP Basic credentials. The password may be the account password or a
-/// personal access token; with a token the username is ignored, as on GitHub.
+/// Authenticate an `Authorization` header: HTTP Basic, where the password may be the
+/// account password or a personal access token (with a token the username is ignored, as
+/// on GitHub), or `token <token>` / `Bearer <token>` as API clients like `gh` send.
 pub async fn authenticate(db: &SqlitePool, headers: &HeaderMap) -> Result<Identity> {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Ok(Identity::Anonymous);
     };
-    let Some((username, secret)) = parse_basic(value.as_bytes()) else {
+    let bytes = value.as_bytes();
+    if let Some(token) = bytes
+        .strip_prefix(b"token ")
+        .or_else(|| bytes.strip_prefix(b"Bearer "))
+    {
+        let token = String::from_utf8_lossy(token).trim().to_owned();
+        if !token.starts_with(TOKEN_PREFIX) {
+            return Ok(Identity::Invalid);
+        }
+        let user = db::user_by_token_hash(db, &hash_token(&token)).await?;
+        return Ok(user.map_or(Identity::Invalid, Identity::User));
+    }
+    let Some((username, secret)) = parse_basic(bytes) else {
         return Ok(Identity::Invalid);
     };
 

@@ -176,6 +176,18 @@ pub async fn create_repo(
     Ok(id)
 }
 
+pub async fn repo_by_id(db: &SqlitePool, id: i64) -> Result<Option<Repo>> {
+    let repo = sqlx::query_as(concat!(
+        "SELECT ",
+        repo_columns!(),
+        " FROM repos r JOIN users u ON u.id = r.owner_id WHERE r.id = ?"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    Ok(repo)
+}
+
 pub async fn repo_by_path(db: &SqlitePool, owner: &str, name: &str) -> Result<Option<Repo>> {
     let repo = sqlx::query_as(concat!(
         "SELECT ",
