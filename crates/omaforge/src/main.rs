@@ -170,7 +170,7 @@ async fn main() -> Result<()> {
                 .trim_end_matches('/')
                 .to_owned();
             let site = web::Site {
-                ssh: Some((url_host(&http_url), ssh_listen.port())),
+                ssh: Some((web::url_host(&http_url), ssh_listen.port())),
                 http_url,
                 theme: web::Theme::from_arg(theme.as_deref())?,
             };
@@ -322,18 +322,4 @@ async fn find_user(state: &AppState, username: &str) -> Result<db::User> {
     db::user_by_username(&state.db, username)
         .await?
         .with_context(|| format!("no such user {username:?}"))
-}
-
-/// The host part of a URL like `https://forge.example.com:8443/path`.
-fn url_host(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split('/').next().unwrap_or(rest);
-    match authority.strip_prefix('[') {
-        // [::1]:3000
-        Some(v6) => format!("[{}]", v6.split(']').next().unwrap_or(v6)),
-        None => authority
-            .rsplit_once(':')
-            .map_or(authority, |(host, _)| host)
-            .to_owned(),
-    }
 }

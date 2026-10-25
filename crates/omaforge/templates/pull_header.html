@@ -1,0 +1,15 @@
+<div class="pull-header">
+  <h1>{{ pull.title }} <span class="muted">#{{ pull.number }}</span></h1>
+  <div class="pull-meta">
+    <span class="state-badge {{ pull.state }}">{{ pull.state_icon|safe }} {{ pull.state_label }}</span>
+    <span><strong>{{ pull.author }}</strong> wants to merge {{ pull.commit_count }} commit{% if pull.commit_count != 1 %}s{% endif %} into
+      <a class="branch" href="{{ pull.base_url }}">{{ pull.base_branch }}</a> from
+      {% if let Some(url) = pull.head_url %}<a class="branch" href="{{ url }}">{{ pull.head_branch }}</a>{% else %}<span class="branch deleted" title="Branch deleted">{{ pull.head_branch }}</span>{% endif %}
+      · opened {{ pull.created_ago }}</span>
+  </div>
+</div>
+<nav class="tabs">
+  <a href="{{ pull.url }}"{% if pull.tab == "conversation" %} class="active"{% endif %}>{{ crate::web::icons::COMMENT|safe }}Conversation</a>
+  <a href="{{ pull.url }}/commits"{% if pull.tab == "commits" %} class="active"{% endif %}>{{ crate::web::icons::HISTORY|safe }}Commits <span class="count">{{ pull.commit_count }}</span></a>
+  <a href="{{ pull.url }}/files"{% if pull.tab == "files" %} class="active"{% endif %}>{{ crate::web::icons::FILE|safe }}Files changed <span class="count">{{ pull.file_count }}</span></a>
+</nav>

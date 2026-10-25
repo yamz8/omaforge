@@ -1,0 +1,60 @@
+<div class="box diff-file" id="diff-{{ f.anchor }}">
+  <div class="box-header">
+    <span class="adds">+{{ f.additions }}</span><span class="dels">−{{ f.deletions }}</span>
+    <span class="path">{% if let Some(old) = f.old_path %}{{ old }} → {% endif %}{{ f.path }}</span>
+    <span class="badge">{{ f.status }}</span>
+    <span class="spacer"></span>
+    {% if !f.url.is_empty() %}<a class="button" href="{{ f.url }}">View file</a>{% endif %}
+  </div>
+  {% for c in f.outdated %}
+  <div class="inline-thread outdated-thread">
+    <div class="comment-meta"><strong>{{ c.author }}</strong> commented {{ c.time_ago }} <span class="badge">outdated</span></div>
+    <div class="markdown">{{ c.html|safe }}</div>
+  </div>
+  {% endfor %}
+  {% if f.binary %}
+  <div class="empty-state">Binary file not shown.</div>
+  {% else if let Some(reason) = f.collapsed %}
+  <div class="empty-state">{{ reason }} <a href="{{ f.url }}">View file</a></div>
+  {% else if f.rows.is_empty() %}
+  <div class="empty-state">{% if f.status == "renamed" %}File renamed without changes.{% else %}No content changes (mode change or empty file).{% endif %}</div>
+  {% else %}
+  <table class="diff">
+    {% for row in f.rows %}
+    {% if row.class == "hunk" %}
+    <tr class="hunk"><td class="num"></td><td class="num"></td><td>{{ row.text }}</td></tr>
+    {% else %}
+    <tr class="{{ row.class }}" id="diff-{{ f.anchor }}-{{ row.dom_id() }}">
+      {% if let Some(url) = row.comment_url %}
+      <td class="num"><a href="{{ url }}" title="Comment on this line">{{ row.old }}</a></td><td class="num"><a href="{{ url }}" title="Comment on this line">{{ row.new }}</a></td>
+      {% else %}
+      <td class="num">{{ row.old }}</td><td class="num">{{ row.new }}</td>
+      {% endif %}
+      <td class="text">{{ row.text }}</td>
+    </tr>
+    {% for c in row.comments %}
+    <tr class="inline-comment"><td colspan="3">
+      <div class="inline-thread" id="comment-{{ c.id }}">
+        <div class="comment-meta"><strong>{{ c.author }}</strong> commented {{ c.time_ago }}{% if c.outdated %} <span class="badge">outdated</span>{% endif %}</div>
+        <div class="markdown">{{ c.html|safe }}</div>
+      </div>
+    </td></tr>
+    {% endfor %}
+    {% if let Some(form) = row.form %}
+    <tr class="inline-comment" id="comment-form"><td colspan="3">
+      <form class="inline-thread comment-form" method="post" action="{{ form.action }}">
+        <input type="hidden" name="csrf" value="{{ form.csrf }}">
+        <input type="hidden" name="path" value="{{ form.path }}">
+        <input type="hidden" name="side" value="{{ form.side }}">
+        <input type="hidden" name="line" value="{{ form.line }}">
+        <input type="hidden" name="commit" value="{{ form.commit }}">
+        <textarea name="body" rows="4" placeholder="Comment on line {{ form.line }}" required autofocus></textarea>
+        <div class="form-actions"><a class="button" href="{{ form.cancel_url }}">Cancel</a><button class="button primary" type="submit">Add comment</button></div>
+      </form>
+    </td></tr>
+    {% endif %}
+    {% endif %}
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>

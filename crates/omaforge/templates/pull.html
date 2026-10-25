@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ pull.title }} · Pull request #{{ pull.number }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+{% include "pull_header.html" %}
+{% if let Some(flash) = flash %}<p class="flash error">{{ flash }}</p>{% endif %}
+<div class="timeline">
+  <div class="comment-box">
+    <div class="comment-meta"><strong>{{ pull.author }}</strong> opened this {{ pull.created_ago }}</div>
+    <div class="comment-body markdown">{% if description.is_empty() %}<p class="muted">No description provided.</p>{% else %}{{ description|safe }}{% endif %}</div>
+  </div>
+  {% for t in timeline %}
+  {% if t.kind == "comment" %}
+  <div class="comment-box" id="comment-{{ t.id }}">
+    <div class="comment-meta"><strong>{{ t.who }}</strong> commented {{ t.time_ago }}{% if let Some((label, url)) = t.context %} on <a class="mono" href="{{ url }}">{{ label }}</a>{% endif %}</div>
+    <div class="comment-body markdown">{{ t.html|safe }}</div>
+  </div>
+  {% else if t.kind == "review" %}
+  <div class="timeline-event review {{ t.tone }}" id="review-{{ t.id }}">
+    <span class="event-icon">{% if t.tone == "approved" %}{{ crate::web::icons::CHECK|safe }}{% else if t.tone == "changes_requested" %}{{ crate::web::icons::ALERT|safe }}{% else %}{{ crate::web::icons::COMMENT|safe }}{% endif %}</span>
+    <div class="event-body">
+      <div><strong>{{ t.who }}</strong> {{ t.text }} {{ t.time_ago }}</div>
+      {% if !t.html.is_empty() %}<div class="markdown review-body">{{ t.html|safe }}</div>{% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="timeline-event {{ t.tone }}">
+    <span class="event-icon">{% if t.tone == "merged" %}{{ crate::web::icons::MERGED|safe }}{% else if t.tone == "closed" %}{{ crate::web::icons::CLOSED_PULL|safe }}{% else if t.tone == "reopened" %}{{ crate::web::icons::PULL|safe }}{% else %}{{ crate::web::icons::BRANCH|safe }}{% endif %}</span>
+    <div class="event-body"><strong>{{ t.who }}</strong> {{ t.text }} {{ t.time_ago }}</div>
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  <div class="merge-box {{ merge.status }}">
+    {% if !merge.reviews.is_empty() %}
+    <div class="merge-row">
+      {% for (who, state) in merge.reviews %}
+      <span class="review-chip {{ state }}">{% if state == "approved" %}{{ crate::web::icons::CHECK|safe }} {{ who }} approved{% else %}{{ crate::web::icons::ALERT|safe }} {{ who }} requested changes{% endif %}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if merge.status == "merged" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::MERGED|safe }}</span><div><strong>Merged</strong> by {{ merge.merged_by }} in <a class="sha" href="{{ merge.merge_url }}">{{ merge.merge_short }}</a>.</div>
+      {% if merge.can_delete_branch %}
+      <span class="spacer"></span>
+      <form method="post" action="{{ pull.url }}/delete-branch"><input type="hidden" name="csrf" value="{{ viewer.csrf }}"><button class="button" type="submit">Delete branch {{ pull.head_branch }}</button></form>
+      {% endif %}
+    </div>
+    {% else if merge.status == "closed" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::CLOSED_PULL|safe }}</span><div><strong>Closed</strong> without merging.</div></div>
+    {% else if merge.status == "missing" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::ALERT|safe }}</span><div><strong>A branch is missing.</strong> {{ pull.head_branch }} or {{ pull.base_branch }} no longer exists, so this can't be merged.</div></div>
+    {% else if merge.status == "uptodate" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::CHECK|safe }}</span><div><strong>Nothing to merge.</strong> Everything in {{ pull.head_branch }} is already in {{ pull.base_branch }}.</div></div>
+    {% else if merge.status == "conflicts" %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::ALERT|safe }}</span><div><strong>This branch has conflicts</strong> that must be resolved before merging:
+      <ul class="conflict-list">{% for f in merge.conflicts %}<li class="mono">{{ f }}</li>{% endfor %}</ul>
+      <p class="muted small">Merge {{ pull.base_branch }} into {{ pull.head_branch }} locally, fix the conflicts and push.</p></div></div>
+    {% else %}
+    <div class="merge-row"><span class="merge-icon">{{ crate::web::icons::CHECK|safe }}</span><div><strong>No conflicts with {{ pull.base_branch }}.</strong>{% if !merge.can_merge %} Only people with write access can merge.{% endif %}</div></div>
+    {% if merge.can_merge %}
+    <form class="merge-row merge-form" method="post" action="{{ pull.url }}/merge">
+      <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+      <select name="method" aria-label="Merge method">
+        <option value="merge">Create a merge commit</option>
+        <option value="squash">Squash and merge</option>
+        <option value="rebase">Rebase and merge</option>
+      </select>
+      <button class="button primary" type="submit">Merge pull request</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  {% if viewer.user.is_some() %}
+  <form class="comment-box comment-form" id="bottom" method="post" action="{{ pull.url }}/comment">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <textarea class="prose" name="body" rows="5" placeholder="Leave a comment (Markdown)"></textarea>
+    <div class="form-actions">
+      {% if can_close %}<button class="button" type="submit" formaction="{{ pull.url }}/state" name="action" value="close">Close pull request</button>{% endif %}
+      {% if can_reopen %}<button class="button" type="submit" formaction="{{ pull.url }}/state" name="action" value="reopen">Reopen pull request</button>{% endif %}
+      <button class="button primary" type="submit">Comment</button>
+    </div>
+  </form>
+  {% if can_review %}
+  <form class="comment-box comment-form review-form" method="post" action="{{ pull.url }}/review">
+    <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+    <div class="comment-meta"><strong>Review these changes</strong></div>
+    <textarea class="prose" name="body" rows="3" placeholder="Summary (optional when approving)"></textarea>
+    <div class="form-actions review-choices">
+      <label><input type="radio" name="state" value="commented" checked> Comment</label>
+      <label><input type="radio" name="state" value="approved"> Approve</label>
+      <label><input type="radio" name="state" value="changes_requested"> Request changes</label>
+      <span class="spacer"></span>
+      <button class="button primary" type="submit">Submit review</button>
+    </div>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="muted center" id="bottom"><a href="/login?next={{ pull.url }}">Sign in</a> to join the conversation.</p>
+  {% endif %}
+</div>
+{% endblock %}

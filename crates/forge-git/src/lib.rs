@@ -1,7 +1,10 @@
 //! Git storage for omaforge: bare repositories on disk under `<data>/repos/<owner>/<name>.git`.
 
 pub mod diff;
+mod merge;
 mod read;
+
+pub use merge::{Identity, MergeMethod, Mergeability};
 
 pub use read::{clean_path, Blob, Commit, EntryKind, ObjectKind, Ref, Repository, TreeEntry};
 

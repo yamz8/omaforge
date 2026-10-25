@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Commits · Pull request #{{ pull.number }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+{% include "pull_header.html" %}
+<div class="box">
+  {% if commits.is_empty() %}<div class="empty-state">No commits.</div>{% else %}
+  <ul class="commit-list">
+    {% for c in commits %}
+    <li>
+      <div class="summary"><a class="subject" href="{{ c.url }}">{{ c.subject }}</a><div class="meta"><strong>{{ c.author }}</strong> committed <span title="{{ c.timestamp }}">{{ c.time_ago }}</span></div></div>
+      <a class="sha" href="{{ c.url }}">{{ c.short_id }}</a>
+      <a class="button" href="{{ c.browse_url }}" title="Browse files at this commit">{{ crate::web::icons::CODE|safe }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

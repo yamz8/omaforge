@@ -1,6 +1,8 @@
 //! The HTML interface: server-rendered pages with no JavaScript required.
 
+mod diff;
 mod icons;
+mod pulls;
 pub mod render;
 mod repo;
 mod session;
@@ -92,6 +94,25 @@ pub fn routes() -> Router<AppState> {
         .route("/{owner}/{repo}/commits", get(repo::commits_default))
         .route("/{owner}/{repo}/commits/{*rest}", get(repo::commits))
         .route("/{owner}/{repo}/commit/{id}", get(repo::commit))
+        .route("/{owner}/{repo}/pulls", get(pulls::list).post(pulls::open))
+        .route("/{owner}/{repo}/compare", get(pulls::compare))
+        .route("/{owner}/{repo}/pull/{number}", get(pulls::conversation))
+        .route("/{owner}/{repo}/pull/{number}/commits", get(pulls::commits))
+        .route("/{owner}/{repo}/pull/{number}/files", get(pulls::files))
+        .route(
+            "/{owner}/{repo}/pull/{number}/comment",
+            post(pulls::comment),
+        )
+        .route("/{owner}/{repo}/pull/{number}/review", post(pulls::review))
+        .route("/{owner}/{repo}/pull/{number}/merge", post(pulls::merge))
+        .route(
+            "/{owner}/{repo}/pull/{number}/state",
+            post(pulls::set_state),
+        )
+        .route(
+            "/{owner}/{repo}/pull/{number}/delete-branch",
+            post(pulls::delete_branch),
+        )
         .route("/{owner}/{repo}/branches", get(repo::branches))
         .route("/{owner}/{repo}/tags", get(repo::tags))
         .fallback(|| async { WebError::NotFound })
@@ -183,7 +204,7 @@ fn page(template: impl Template) -> WebResult {
 }
 
 /// Encode a value for a query string.
-fn form_urlencode(value: &str) -> String {
+pub(crate) fn form_urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
@@ -193,4 +214,18 @@ fn form_urlencode(value: &str) -> String {
         }
     }
     out
+}
+
+/// The host part of a URL like `https://forge.example.com:8443/path`.
+pub fn url_host(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    match authority.strip_prefix('[') {
+        // [::1]:3000
+        Some(v6) => format!("[{}]", v6.split(']').next().unwrap_or(v6)),
+        None => authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+            .to_owned(),
+    }
 }

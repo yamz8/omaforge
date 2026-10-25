@@ -55,3 +55,21 @@ icon!(
     r#"<path d="M2 2.75h4.5A1.5 1.5 0 0 1 8 4.25v9.5A1.5 1.5 0 0 0 6.5 12.25H2ZM14 2.75H9.5A1.5 1.5 0 0 0 8 4.25v9.5a1.5 1.5 0 0 1 1.5-1.5H14Z"/>"#
 );
 icon!(PLUS, r#"<path d="M8 3v10M3 8h10"/>"#);
+icon!(
+    PULL,
+    r#"<circle cx="4" cy="3.5" r="1.75"/><circle cx="4" cy="12.5" r="1.75"/><circle cx="12" cy="12.5" r="1.75"/><path d="M4 5.25v5.5M12 10.75V6.5a2 2 0 0 0-2-2H7.5M9 3 7.5 4.5 9 6"/>"#
+);
+icon!(
+    MERGED,
+    r#"<circle cx="4" cy="3.5" r="1.75"/><circle cx="4" cy="12.5" r="1.75"/><circle cx="12" cy="8" r="1.75"/><path d="M4 5.25v5.5M4 5.25c0 2 2 2.75 6.25 2.75"/>"#
+);
+icon!(
+    CLOSED_PULL,
+    r#"<circle cx="4" cy="3.5" r="1.75"/><circle cx="4" cy="12.5" r="1.75"/><circle cx="12" cy="12.5" r="1.75"/><path d="M4 5.25v5.5M12 10.75V8M10.5 2.5l3 3M13.5 2.5l-3 3"/>"#
+);
+icon!(CHECK, r#"<path d="M3 8.5 6.5 12 13 4.5"/>"#);
+icon!(
+    ALERT,
+    r#"<path d="M8 1.75 14.75 13.5H1.25Z"/><path d="M8 6v3.5M8 11.5v.25"/>"#
+);
+icon!(COMMENT, r#"<path d="M2 3.25h12v8H8.5L5 14v-2.75H2Z"/>"#);

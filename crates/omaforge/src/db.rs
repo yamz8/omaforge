@@ -1,3 +1,7 @@
+mod pulls;
+
+pub use pulls::*;
+
 use std::path::Path;
 
 use anyhow::Result;
@@ -16,6 +20,7 @@ pub struct User {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Repo {
+    pub id: i64,
     pub owner_id: i64,
     /// Canonical owner username, used for the on-disk path.
     pub owner_name: String,
@@ -27,7 +32,7 @@ pub struct Repo {
 /// The columns of [`Repo`], for `SELECT ... FROM repos r JOIN users u ON u.id = r.owner_id`.
 macro_rules! repo_columns {
     () => {
-        "r.owner_id, u.username AS owner_name, r.name, r.description, r.is_private"
+        "r.id, r.owner_id, u.username AS owner_name, r.name, r.description, r.is_private"
     };
 }
 
@@ -83,6 +88,15 @@ pub async fn set_password(db: &SqlitePool, user_id: i64, password_hash: &str) ->
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// The email to put on commits a user makes through the web, if they set one.
+pub async fn user_email(db: &SqlitePool, user_id: i64) -> Result<Option<String>> {
+    let email = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(email.flatten())
 }
 
 pub async fn user_by_username(db: &SqlitePool, username: &str) -> Result<Option<User>> {

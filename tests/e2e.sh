@@ -253,6 +253,83 @@ $BIN import local "$F/later" --owner alice --public >/dev/null 2>&1
 check "--public imports public"     git clone -q $URL/alice/later.git later-clone
 refuse "unknown owner"              $BIN import local "$F/later" --owner nobody
 
+echo "== Pull requests"
+A=$W/alice-pr.jar B=$W/bob-pr.jar
+curl -s -c $A --data 'login=alice&password=newpassword9' -o /dev/null $URL/login
+curl -s -c $B --data 'login=bob&password=bobpassword1' -o /dev/null $URL/login
+$BIN admin create-repo alice/prs >/dev/null
+PRS=http://alice:$WEB_TOKEN@127.0.0.1:$PORT/alice/prs.git
+git init -q -b main prs-src && (
+    cd prs-src
+    printf 'one\ntwo\nthree\n' >f.txt && git add f.txt && git commit -qm "Start"
+    git checkout -qb feature && printf 'hello\n' >g.txt && git add g.txt && git commit -qm "Add g" \
+        && printf 'hello world\n' >g.txt && git commit -qam "Improve g"
+    git checkout -qb conflict main && sed -i 's/two/TWO/' f.txt && git commit -qam "Shout two"
+    git checkout -qb squash-me main && echo s1 >s.txt && git add s.txt && git commit -qm "s1" && echo s2 >>s.txt && git commit -qam "s2"
+    git checkout -qb rebase-me main && echo r1 >r.txt && git add r.txt && git commit -qm "Rebase one" && echo r2 >>r.txt && git commit -qam "Rebase two"
+    git checkout -q main && sed -i 's/two/deux/' f.txt && git commit -qam "Translate two"
+    git push -q $PRS main feature conflict squash-me rebase-me
+)
+# open_pr <jar> <head> <title>: open a pull request against main, print "<status> <location>".
+open_pr() { post $1 /alice/prs/pulls csrf=$(csrf $1 "/alice/prs/compare?base=main&head=$2") base=main head=$2 "title=$3" "body=About $2"; }
+pr_csrf() { csrf $1 /alice/prs/pull/$2; }
+main_sha() { git ls-remote $PRS refs/heads/main 2>/dev/null | cut -f1; }
+check "compare shows commits"       bash -c "curl -s '$URL/alice/prs/compare?base=main&head=feature' | grep -q 'Improve g'"
+check "compare: no form signed out" bash -c "! curl -s '$URL/alice/prs/compare?base=main&head=feature' | grep -q 'Open pull request'"
+check "compare: same branch"        bash -c "curl -s '$URL/alice/prs/compare?base=main&head=main' | grep -q 'Choose two different branches'"
+check "bob opens a pull request"    test "$(open_pr $B feature 'Add g')" = "303 $URL/alice/prs/pull/1"
+check "duplicate is refused"        bash -c "curl -s -b $B '$URL/alice/prs/compare?base=main&head=feature' | grep -q 'already an open pull request'"
+check "listed with count"           bash -c "curl -s $URL/alice/prs/pulls | grep -q '#1 opened' && curl -s $URL/alice/prs | grep -q '<span class=\"count\">1</span>'"
+check "conversation shows it"       bash -c "curl -s $URL/alice/prs/pull/1 | grep -q 'About feature'"
+check "commits tab"                 bash -c "curl -s $URL/alice/prs/pull/1/commits | grep -q 'Add g' && ! curl -s $URL/alice/prs/pull/1/commits | grep -q 'Translate two'"
+check "files tab is head's diff"    bash -c "curl -s $URL/alice/prs/pull/1/files | grep -q 'g.txt' && ! curl -s $URL/alice/prs/pull/1/files | grep -q 'f.txt'"
+post $B /alice/prs/pull/1/comment csrf=$(pr_csrf $B 1) "body=Ready for **review**" >/dev/null
+check "comment rendered"            bash -c "curl -s $URL/alice/prs/pull/1 | grep -q 'Ready for <strong>review</strong>'"
+check "line link opens a form"      bash -c "curl -s -b $A '$URL/alice/prs/pull/1/files?path=g.txt&side=new&line=1' | grep -q 'Comment on line 1'"
+HEAD1=$(git -C prs-src rev-parse feature)
+post $A /alice/prs/pull/1/comment csrf=$(pr_csrf $A 1) "body=Nice line" path=g.txt side=new line=1 commit=$HEAD1 >/dev/null
+check "line comment under its line" bash -c "curl -s $URL/alice/prs/pull/1/files | grep -A6 'hello world' | grep -q 'Nice line'"
+check "line comment in timeline"    bash -c "curl -s $URL/alice/prs/pull/1 | grep -q 'g.txt:1'"
+post $B /alice/prs/pull/1/review csrf=$(pr_csrf $B 1) state=approved >/dev/null
+check "author can't self-approve"   grep -q "can&#39;t review your own pull request" $W/post.html
+post $A /alice/prs/pull/1/review csrf=$(pr_csrf $A 1) state=approved "body=LGTM" >/dev/null
+check "reviewer approves"           bash -c "curl -s $URL/alice/prs/pull/1 | grep -q 'approved these changes' && curl -s $URL/alice/prs/pull/1 | grep -q 'alice approved'"
+check "bob can't merge"             test "$(post $B /alice/prs/pull/1/merge csrf=$(pr_csrf $B 1) method=merge | cut -d' ' -f1)" = 403
+check "merge needs CSRF"            test "$(post $A /alice/prs/pull/1/merge csrf=nope method=merge | cut -d' ' -f1)" = 403
+check "merge button for owner"      bash -c "curl -s -b $A $URL/alice/prs/pull/1 | grep -q 'Merge pull request'"
+OLD_MAIN=$(main_sha)
+check "alice merges"                test "$(post $A /alice/prs/pull/1/merge csrf=$(pr_csrf $A 1) method=merge)" = "303 $URL/alice/prs/pull/1"
+check "merge commit has 2 parents"  bash -c "git -C prs-src fetch -q $PRS main && [ \$(git -C prs-src log -1 --format=%P FETCH_HEAD | wc -w) = 2 ] && [ \"\$(git -C prs-src log -1 --format=%P FETCH_HEAD)\" = '$OLD_MAIN $HEAD1' ]"
+check "merge message"               bash -c "git -C prs-src log -1 --format=%s FETCH_HEAD | grep -q 'Merge pull request #1 from feature'"
+check "shows as merged"             bash -c "curl -s $URL/alice/prs/pull/1 | grep -q 'state-badge merged' && curl -s '$URL/alice/prs/pulls?state=closed' | grep -q '#1 opened'"
+check "open count back to 0"        bash -c "! curl -s $URL/alice/prs | grep -q '<span class=\"count\">'"
+post $A /alice/prs/pull/1/delete-branch csrf=$(pr_csrf $A 1) >/dev/null
+check "branch deleted"              bash -c "! git ls-remote $PRS 2>/dev/null | grep -q refs/heads/feature && curl -s $URL/alice/prs/pull/1 | grep -q 'deleted the feature branch'"
+check "merged PR still has commits" bash -c "curl -s $URL/alice/prs/pull/1/commits | grep -q 'Improve g'"
+check "conflicting PR opens"        test "$(open_pr $B conflict 'Shout')" = "303 $URL/alice/prs/pull/2"
+check "conflicts reported"          bash -c "curl -s $URL/alice/prs/pull/2 | grep -q 'This branch has conflicts' && curl -s $URL/alice/prs/pull/2 | grep -q '<li class=\"mono\">f.txt</li>'"
+BEFORE=$(main_sha)
+post $A /alice/prs/pull/2/merge csrf=$(pr_csrf $A 2) method=merge >/dev/null
+check "conflicting merge refused"   bash -c "grep -q \"can&#39;t be merged\\|Couldn&#39;t merge\" $W/post.html && [ \"\$(git ls-remote $PRS refs/heads/main 2>/dev/null | cut -f1)\" = '$BEFORE' ]"
+post $B /alice/prs/pull/2/state csrf=$(pr_csrf $B 2) action=close "body=Not needed" >/dev/null
+check "author closes"               bash -c "curl -s $URL/alice/prs/pull/2 | grep -q 'state-badge closed' && curl -s $URL/alice/prs/pull/2 | grep -q 'closed this'"
+post $B /alice/prs/pull/2/state csrf=$(pr_csrf $B 2) action=reopen >/dev/null
+check "author reopens"              bash -c "curl -s $URL/alice/prs/pull/2 | grep -q 'state-badge open' && curl -s $URL/alice/prs/pull/2 | grep -q 'reopened this'"
+check "anonymous can't comment"     bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' --data 'csrf=x&body=hi' $URL/alice/prs/pull/2/comment)\" = 303 ] && ! curl -s $URL/alice/prs/pull/2 | grep -q '>hi<'"
+open_pr $B squash-me 'Squash these' >/dev/null
+post $A /alice/prs/pull/3/merge csrf=$(pr_csrf $A 3) method=squash >/dev/null
+check "squash: one commit"          bash -c "git -C prs-src fetch -q $PRS main && [ \$(git -C prs-src log -1 --format=%P FETCH_HEAD | wc -w) = 1 ] && git -C prs-src log -1 --format=%s FETCH_HEAD | grep -qx 'Squash these (#3)'"
+check "squash: PR author credited"  bash -c "[ \"\$(git -C prs-src log -1 --format='%an|%cn' FETCH_HEAD)\" = 'bob|alice' ]"
+check "squash: content merged"      bash -c "[ \"\$(git -C prs-src show FETCH_HEAD:s.txt)\" = \$'s1\\ns2' ]"
+open_pr $B rebase-me 'Rebase these' >/dev/null
+(cd prs-src && git checkout -q rebase-me && echo r3 >>r.txt && git commit -qam "Rebase three" && git push -q $PRS rebase-me && git checkout -q main)
+check "pushes update the PR"        bash -c "curl -s $URL/alice/prs/pull/4/commits | grep -q 'Rebase three'"
+post $A /alice/prs/pull/4/merge csrf=$(pr_csrf $A 4) method=rebase >/dev/null
+check "rebase: commits replayed"    bash -c "git -C prs-src fetch -q $PRS main && [ \"\$(git -C prs-src log -3 --format=%s FETCH_HEAD | tr '\\n' '|')\" = 'Rebase three|Rebase two|Rebase one|' ]"
+check "rebase: linear history"      bash -c "[ \$(git -C prs-src log -1 --format=%P FETCH_HEAD | wc -w) = 1 ] && [ \"\$(git -C prs-src log -1 --format='%an|%cn' FETCH_HEAD)\" = 'test|alice' ]"
+check "merged PR files still work"  bash -c "curl -s $URL/alice/prs/pull/4/files | grep -q 'r.txt'"
+check "private repo PRs hidden"     test "$(curl -s -o /dev/null -w '%{http_code}' $URL/alice/secret/pulls)" = 404
+
 echo "---- $pass passed, $fail failed"
 if grep -qiE " (ERROR|WARN) " "$W/server.log"; then
     echo "server log warnings/errors:"; grep -iE " (ERROR|WARN) " "$W/server.log" | head -10

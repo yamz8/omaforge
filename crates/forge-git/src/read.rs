@@ -79,7 +79,8 @@ pub enum ObjectKind {
 }
 
 // Fields are separated by US and records by RS, which don't occur in names or messages.
-const COMMIT_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%s%x1f%b%x1e";
+pub(crate) const COMMIT_FORMAT: &str =
+    "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%s%x1f%b%x1e";
 
 impl Repository {
     pub fn open(git_dir: impl Into<PathBuf>) -> Self {
@@ -92,7 +93,7 @@ impl Repository {
         &self.git_dir
     }
 
-    fn command(&self) -> Command {
+    pub(crate) fn command(&self) -> Command {
         let mut command = Command::new("git");
         command
             .arg("--git-dir")
@@ -104,7 +105,7 @@ impl Repository {
     }
 
     /// Run git and return stdout, failing if git does.
-    async fn run<I, S>(&self, args: I) -> Result<Vec<u8>>
+    pub(crate) async fn run<I, S>(&self, args: I) -> Result<Vec<u8>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -125,7 +126,7 @@ impl Repository {
     }
 
     /// Run git and return stdout, or `None` if git exits unsuccessfully (e.g. a missing object).
-    async fn try_run<I, S>(&self, args: I) -> Result<Option<Vec<u8>>>
+    pub(crate) async fn try_run<I, S>(&self, args: I) -> Result<Option<Vec<u8>>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -333,7 +334,7 @@ impl Repository {
             args.extend(["--".to_owned(), clean_path(path)?]);
         }
         let out = self.run(&args).await?;
-        Ok(records(&out).filter_map(parse_commit).collect())
+        Ok(parse_commits(&out))
     }
 
     /// Number of commits reachable from `commit`.
@@ -384,7 +385,7 @@ pub fn clean_path(path: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
-fn check_id(id: &str) -> Result<&str> {
+pub(crate) fn check_id(id: &str) -> Result<&str> {
     if (4..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(id)
     } else {
@@ -412,6 +413,10 @@ fn fields<const N: usize>(record: &str) -> Option<[&str; N]> {
         *field = parts.next()?;
     }
     Some(fields)
+}
+
+pub(crate) fn parse_commits(out: &[u8]) -> Vec<Commit> {
+    records(out).filter_map(parse_commit).collect()
 }
 
 fn parse_commit(record: &str) -> Option<Commit> {

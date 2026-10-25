@@ -17,31 +17,6 @@
 </div>
 <p class="diff-stats">Showing <strong>{{ files.len() }} changed file{% if files.len() != 1 %}s{% endif %}</strong> with <span class="adds">{{ additions }} addition{% if additions != 1 %}s{% endif %}</span> and <span class="dels">{{ deletions }} deletion{% if deletions != 1 %}s{% endif %}</span>.</p>
 {% for f in files %}
-<div class="box diff-file" id="diff-{{ loop.index }}">
-  <div class="box-header">
-    <span class="adds">+{{ f.additions }}</span><span class="dels">−{{ f.deletions }}</span>
-    <span class="path">{% if let Some(old) = f.old_path %}{{ old }} → {% endif %}{{ f.path }}</span>
-    <span class="badge">{{ f.status }}</span>
-    <span class="spacer"></span>
-    {% if !f.url.is_empty() %}<a class="button" href="{{ f.url }}">View file</a>{% endif %}
-  </div>
-  {% if f.binary %}
-  <div class="empty-state">Binary file not shown.</div>
-  {% else if let Some(reason) = f.collapsed %}
-  <div class="empty-state">{{ reason }} <a href="{{ f.url }}">View file</a></div>
-  {% else if f.rows.is_empty() %}
-  <div class="empty-state">{% if f.status == "renamed" %}File renamed without changes.{% else %}No content changes (mode change or empty file).{% endif %}</div>
-  {% else %}
-  <table class="diff">
-    {% for row in f.rows %}
-    {% if row.class == "hunk" %}
-    <tr class="hunk"><td class="num"></td><td class="num"></td><td>{{ row.text }}</td></tr>
-    {% else %}
-    <tr class="{{ row.class }}"><td class="num">{{ row.old }}</td><td class="num">{{ row.new }}</td><td class="text">{{ row.text }}</td></tr>
-    {% endif %}
-    {% endfor %}
-  </table>
-  {% endif %}
-</div>
+{% include "diff_file.html" %}
 {% endfor %}
 {% endblock %}

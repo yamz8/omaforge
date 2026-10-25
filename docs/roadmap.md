@@ -20,8 +20,10 @@ Each milestone should be something you can use day to day before the next one st
 
 ## M1: Collaborate
 - [ ] Issues: markdown, labels, assignees, comments, references (`#12`, `fixes #12`)
-- [ ] Pull requests: compare, create, diff view, inline review comments, approve/request changes
-- [ ] Merge: merge commit, squash, rebase; branch protection basics
+- [x] Pull requests: compare, create, diff view, inline review comments, approve/request changes
+- [x] Merge: merge commit, squash, rebase (in the bare repo, compare-and-swap on the branch); delete merged branch
+- [ ] Branch protection basics (required review, no direct pushes)
+- [ ] Collaborators, so people other than the owner can push and merge
 - [ ] Notifications, plus webhooks with GitHub-shaped payloads
 
 ## M2: Leave GitHub (or don't)

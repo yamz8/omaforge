@@ -6,10 +6,7 @@ use axum::{
     http::header,
     response::{IntoResponse, Redirect},
 };
-use forge_git::{
-    diff::{FileStatus, LineKind},
-    EntryKind, ObjectKind, Repository,
-};
+use forge_git::{diff::FileStatus, EntryKind, ObjectKind, Repository};
 use serde::Deserialize;
 
 use super::{
@@ -24,62 +21,62 @@ const DISPLAY_LIMIT: u64 = 1024 * 1024;
 /// Raw downloads are read into memory, so cap them.
 const RAW_LIMIT: u64 = 100 * 1024 * 1024;
 const COMMITS_PER_PAGE: usize = 30;
-/// Diffs with more lines than this have the remaining files collapsed.
-const DIFF_LINE_BUDGET: usize = 20_000;
 
 // ---- Shared view pieces ----
 
 /// What every repository page shows in its header.
-struct RepoContext {
-    owner: String,
-    name: String,
-    url: String,
-    description: String,
-    is_private: bool,
-    http_clone: String,
-    ssh_clone: Option<String>,
-    /// `code`, `commits`, `branches` or `tags`.
-    tab: &'static str,
+pub(super) struct RepoContext {
+    pub(super) owner: String,
+    pub(super) name: String,
+    pub(super) url: String,
+    pub(super) description: String,
+    pub(super) is_private: bool,
+    pub(super) http_clone: String,
+    pub(super) ssh_clone: Option<String>,
+    /// `code`, `pulls`, `commits`, `branches` or `tags`.
+    pub(super) tab: &'static str,
+    pub(super) open_pulls: i64,
 }
 
-struct RefLink {
-    name: String,
-    url: String,
-    current: bool,
+pub(super) struct RefLink {
+    pub(super) name: String,
+    pub(super) url: String,
+    pub(super) current: bool,
 }
 
-struct RefPicker {
-    current: String,
-    branches: Vec<RefLink>,
-    tags: Vec<RefLink>,
+pub(super) struct RefPicker {
+    pub(super) current: String,
+    pub(super) branches: Vec<RefLink>,
+    pub(super) tags: Vec<RefLink>,
 }
 
-struct Crumb {
-    name: String,
-    url: String,
+pub(super) struct Crumb {
+    pub(super) name: String,
+    pub(super) url: String,
 }
 
-struct CommitView {
-    id: String,
-    short_id: String,
-    subject: String,
-    author: String,
-    time_ago: String,
-    timestamp: String,
-    url: String,
-    browse_url: String,
+pub(super) struct CommitView {
+    pub(super) id: String,
+    pub(super) short_id: String,
+    pub(super) subject: String,
+    pub(super) author: String,
+    pub(super) time_ago: String,
+    pub(super) timestamp: String,
+    pub(super) url: String,
+    pub(super) browse_url: String,
 }
 
 /// A repository someone may view, with its git directory opened.
-struct Loaded {
-    viewer: Viewer,
-    repo: db::Repo,
-    git: Repository,
-    url: String,
+pub(super) struct Loaded {
+    pub(super) viewer: Viewer,
+    pub(super) repo: db::Repo,
+    pub(super) git: Repository,
+    pub(super) url: String,
+    pub(super) open_pulls: i64,
 }
 
 impl Loaded {
-    fn context(&self, state: &AppState, tab: &'static str) -> RepoContext {
+    pub(super) fn context(&self, state: &AppState, tab: &'static str) -> RepoContext {
         RepoContext {
             owner: self.repo.owner_name.clone(),
             name: self.repo.name.clone(),
@@ -93,11 +90,12 @@ impl Loaded {
                 .site
                 .ssh_clone_url(&self.repo.owner_name, &self.repo.name),
             tab,
+            open_pulls: self.open_pulls,
         }
     }
 
     /// `{repo}/{view}/{rev}/{path}`, with the path URL-encoded.
-    fn view_url(&self, view: &str, rev: &str, path: &str) -> String {
+    pub(super) fn view_url(&self, view: &str, rev: &str, path: &str) -> String {
         let mut url = format!("{}/{view}/{}", self.url, encode_path(rev));
         if !path.is_empty() {
             url.push('/');
@@ -106,7 +104,7 @@ impl Loaded {
         url
     }
 
-    fn commit_view(&self, commit: &forge_git::Commit) -> CommitView {
+    pub(super) fn commit_view(&self, commit: &forge_git::Commit) -> CommitView {
         CommitView {
             id: commit.id.clone(),
             short_id: commit.short_id().to_owned(),
@@ -120,7 +118,12 @@ impl Loaded {
     }
 
     /// The branch/tag picker, linking each ref to the same `view` and `path`.
-    async fn picker(&self, view: &str, current: &str, path: &str) -> WebResult<RefPicker> {
+    pub(super) async fn picker(
+        &self,
+        view: &str,
+        current: &str,
+        path: &str,
+    ) -> WebResult<RefPicker> {
         let link = |name: String| RefLink {
             url: self.view_url(view, &name, path),
             current: name == current,
@@ -151,7 +154,7 @@ impl Loaded {
         })
     }
 
-    fn crumbs(&self, rev: &str, path: &str) -> Vec<Crumb> {
+    pub(super) fn crumbs(&self, rev: &str, path: &str) -> Vec<Crumb> {
         let mut crumbs = Vec::new();
         let mut so_far = String::new();
         for part in path.split('/').filter(|p| !p.is_empty()) {
@@ -169,7 +172,12 @@ impl Loaded {
 }
 
 /// Load a repository the viewer is allowed to see; anything else is "not found".
-async fn load(state: &AppState, viewer: Viewer, owner: &str, name: &str) -> WebResult<Loaded> {
+pub(super) async fn load(
+    state: &AppState,
+    viewer: Viewer,
+    owner: &str,
+    name: &str,
+) -> WebResult<Loaded> {
     if !forge_git::is_valid_name(owner) || !forge_git::is_valid_name(name) {
         return Err(WebError::NotFound);
     }
@@ -183,11 +191,13 @@ async fn load(state: &AppState, viewer: Viewer, owner: &str, name: &str) -> WebR
         &repo.name,
     ));
     let url = format!("/{}/{}", repo.owner_name, repo.name);
+    let (open_pulls, _) = db::pull_counts(&state.db, repo.id).await?;
     Ok(Loaded {
         viewer,
         repo,
         git,
         url,
+        open_pulls,
     })
 }
 
@@ -211,7 +221,7 @@ async fn split_rev(git: &Repository, rest: &str) -> WebResult<(String, String, S
 }
 
 /// Percent-encode a path for use in a URL, keeping `/`.
-fn encode_path(path: &str) -> String {
+pub(super) fn encode_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for byte in path.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/!$&'()*+,;=:@".contains(&byte) {
@@ -221,28 +231,6 @@ fn encode_path(path: &str) -> String {
         }
     }
     out
-}
-
-/// Lock files and similar, whose diffs are noise; collapsed like GitHub does.
-fn is_generated(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    matches!(
-        name,
-        "Cargo.lock"
-            | "package-lock.json"
-            | "yarn.lock"
-            | "pnpm-lock.yaml"
-            | "bun.lock"
-            | "Gemfile.lock"
-            | "composer.lock"
-            | "poetry.lock"
-            | "uv.lock"
-            | "go.sum"
-            | "flake.lock"
-            | "mix.lock"
-            | "Package.resolved"
-    ) || name.ends_with(".min.js")
-        || name.ends_with(".min.css")
 }
 
 fn join_path(dir: &str, name: &str) -> String {
@@ -721,27 +709,6 @@ pub async fn commits(
     })
 }
 
-struct DiffRow {
-    /// `ctx`, `add`, `del`, `hunk` or `nonewline`.
-    class: &'static str,
-    old: String,
-    new: String,
-    text: String,
-}
-
-struct FileView {
-    path: String,
-    old_path: Option<String>,
-    status: &'static str,
-    additions: usize,
-    deletions: usize,
-    binary: bool,
-    /// Why the diff isn't shown inline, if it isn't.
-    collapsed: Option<&'static str>,
-    url: String,
-    rows: Vec<DiffRow>,
-}
-
 #[derive(Template)]
 #[template(path = "commit.html")]
 struct CommitPage {
@@ -751,7 +718,7 @@ struct CommitPage {
     body: String,
     committer: Option<String>,
     parents: Vec<(String, String)>,
-    files: Vec<FileView>,
+    files: Vec<super::diff::FileView>,
     additions: usize,
     deletions: usize,
 }
@@ -774,69 +741,15 @@ pub async fn commit(
         .ok_or(WebError::NotFound)?;
     let diff = repo.git.diff(&commit_id).await?;
 
-    let mut budget = DIFF_LINE_BUDGET;
-    let files = diff
-        .iter()
-        .map(|file| {
-            let lines: usize = file.hunks.iter().map(|h| h.lines.len() + 1).sum();
-            let collapsed = if is_generated(file.path()) {
-                Some("Generated file not rendered.")
-            } else if lines > budget {
-                Some("Large diff not rendered.")
-            } else {
-                budget -= lines;
-                None
-            };
-            let mut rows = Vec::new();
-            if collapsed.is_none() {
-                for hunk in &file.hunks {
-                    rows.push(DiffRow {
-                        class: "hunk",
-                        old: String::new(),
-                        new: String::new(),
-                        text: hunk.header.clone(),
-                    });
-                    for line in &hunk.lines {
-                        let class = match line.kind {
-                            LineKind::Context => "ctx",
-                            LineKind::Added => "add",
-                            LineKind::Deleted => "del",
-                            LineKind::NoNewline => "nonewline",
-                        };
-                        let number = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
-                        rows.push(DiffRow {
-                            class,
-                            old: number(line.old_line),
-                            new: number(line.new_line),
-                            text: line.text.clone(),
-                        });
-                    }
-                }
-            }
-            FileView {
-                path: file.path().to_owned(),
-                old_path: (file.status == FileStatus::Renamed).then(|| file.old_path.clone()),
-                status: match file.status {
-                    FileStatus::Added => "added",
-                    FileStatus::Deleted => "deleted",
-                    FileStatus::Modified => "modified",
-                    FileStatus::Renamed => "renamed",
-                },
-                additions: file.additions,
-                deletions: file.deletions,
-                binary: file.binary,
-                collapsed,
-                url: if file.status == FileStatus::Deleted {
-                    commit.parents.first().map_or_else(String::new, |parent| {
-                        repo.view_url("blob", parent, file.path())
-                    })
-                } else {
-                    repo.view_url("blob", &commit.id, file.path())
-                },
-                rows,
-            }
-        })
-        .collect::<Vec<_>>();
+    let files = super::diff::file_views(&diff, |file| {
+        if file.status == FileStatus::Deleted {
+            commit.parents.first().map_or_else(String::new, |parent| {
+                repo.view_url("blob", parent, file.path())
+            })
+        } else {
+            repo.view_url("blob", &commit.id, file.path())
+        }
+    });
 
     page(CommitPage {
         viewer: repo.viewer.clone(),

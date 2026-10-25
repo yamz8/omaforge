@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Files · Pull request #{{ pull.number }} · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+{% include "pull_header.html" %}
+<div class="toolbar">
+  <p class="diff-stats">Showing <strong>{{ files.len() }} changed file{% if files.len() != 1 %}s{% endif %}</strong> with <span class="adds">{{ additions }} addition{% if additions != 1 %}s{% endif %}</span> and <span class="dels">{{ deletions }} deletion{% if deletions != 1 %}s{% endif %}</span>.{% if viewer.user.is_some() %} <span class="muted">Click a line number to comment.</span>{% endif %}</p>
+  <span class="spacer"></span>
+  {% if can_review %}<a class="button primary" href="{{ pull.url }}#bottom">Review changes</a>{% endif %}
+</div>
+{% for f in files %}
+{% include "diff_file.html" %}
+{% endfor %}
+{% endblock %}

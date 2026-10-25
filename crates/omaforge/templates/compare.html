@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Compare · {{ repo.owner }}/{{ repo.name }} · omaforge{% endblock %}
+{% block content %}
+{% include "repo_header.html" %}
+<h1 class="page-title">Compare changes</h1>
+<form class="box compare-bar" method="get" action="{{ repo.url }}/compare">
+  {{ crate::web::icons::BRANCH|safe }}
+  <label>base
+    <select name="base">{% for b in branches %}<option value="{{ b }}"{% if *b == base %} selected{% endif %}>{{ b }}</option>{% endfor %}</select>
+  </label>
+  <span class="muted">←</span>
+  <label>compare
+    <select name="head"><option value="">choose a branch</option>{% for b in branches %}<option value="{{ b }}"{% if *b == head %} selected{% endif %}>{{ b }}</option>{% endfor %}</select>
+  </label>
+  <button class="button" type="submit">Compare</button>
+  {% if let Some(ok) = mergeable %}
+  {% if *ok %}<span class="status ok">{{ crate::web::icons::CHECK|safe }} Able to merge.</span>{% else %}<span class="status warn">{{ crate::web::icons::ALERT|safe }} Can't be merged automatically; you can still open the pull request.</span>{% endif %}
+  {% endif %}
+</form>
+{% if let Some(message) = message %}<div class="box"><div class="empty-state">{{ message }}</div></div>{% endif %}
+{% if let Some((number, url)) = existing %}<p class="flash ok">There's already an open pull request for these branches: <a href="{{ url }}">#{{ number }}</a>.</p>{% endif %}
+{% if can_open %}
+<form class="box form" method="post" action="{{ repo.url }}/pulls">
+  <input type="hidden" name="csrf" value="{{ viewer.csrf }}">
+  <input type="hidden" name="base" value="{{ base }}">
+  <input type="hidden" name="head" value="{{ head }}">
+  {% if let Some(error) = error %}<p class="flash error">{{ error }}</p>{% endif %}
+  <label>Title<input name="title" value="{{ title }}" required></label>
+  <label><span>Description <span class="muted">(Markdown)</span></span><textarea class="prose" name="body" rows="8">{{ body }}</textarea></label>
+  <button class="button primary" type="submit">Open pull request</button>
+</form>
+{% else if let Some(error) = error %}<p class="flash error">{{ error }}</p>
+{% endif %}
+{% if !commits.is_empty() %}
+<h2 class="section-title">{{ commits.len() }} commit{% if commits.len() != 1 %}s{% endif %}</h2>
+<div class="box">
+  <ul class="commit-list">
+    {% for c in commits %}
+    <li>
+      <div class="summary"><a class="subject" href="{{ c.url }}">{{ c.subject }}</a><div class="meta"><strong>{{ c.author }}</strong> committed <span title="{{ c.timestamp }}">{{ c.time_ago }}</span></div></div>
+      <a class="sha" href="{{ c.url }}">{{ c.short_id }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+<p class="diff-stats">Showing <strong>{{ files.len() }} changed file{% if files.len() != 1 %}s{% endif %}</strong> with <span class="adds">{{ additions }} addition{% if additions != 1 %}s{% endif %}</span> and <span class="dels">{{ deletions }} deletion{% if deletions != 1 %}s{% endif %}</span>.</p>
+{% for f in files %}
+{% include "diff_file.html" %}
+{% endfor %}
+{% endif %}
+{% endblock %}
